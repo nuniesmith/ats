@@ -51,39 +51,46 @@ jobs:
           echo "  - Create new server: $SHOULD_CREATE"
 
       - name: 🔐 Validate Required Secrets
-        run: |
-          echo "🔐 Validating required secrets..."
-          
-          MISSING_SECRETS=()
-          
-          # Check required secrets
-          declare -A REQUIRED_SECRETS=(
-            ["LINODE_TOKEN"]="Linode API token for server provisioning"
-            ["ATS_ROOT_PASSWORD"]="Root password for ATS server"
-            ["ACTIONS_USER_PASSWORD"]="Password for actions user account"
-          )
-          
-          for secret in "${!REQUIRED_SECRETS[@]}"; do
-            if [ -z "${!secret}" ]; then
-              MISSING_SECRETS+=("$secret")
-              echo "❌ Missing: $secret - ${REQUIRED_SECRETS[$secret]}"
-            else
-              echo "✅ Found: $secret"
-            fi
-          done
-          
-          if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
-            echo ""
-            echo "❌ Missing ${#MISSING_SECRETS[@]} required secret(s)"
-            echo "📋 To fix: Go to https://github.com/${{ github.repository }}/settings/secrets/actions"
-            exit 1
-          fi
-          
-          echo "✅ All required secrets validated"
         env:
           LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
           ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
           ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+        run: |
+          echo "🔐 Validating required secrets..."
+          
+          MISSING_COUNT=0
+          
+          # Check each required secret
+          if [ -z "$LINODE_TOKEN" ]; then
+            echo "❌ Missing: LINODE_TOKEN - Linode API token for server provisioning"
+            MISSING_COUNT=$((MISSING_COUNT + 1))
+          else
+            echo "✅ Found: LINODE_TOKEN"
+          fi
+          
+          if [ -z "$ATS_ROOT_PASSWORD" ]; then
+            echo "❌ Missing: ATS_ROOT_PASSWORD - Root password for ATS server"
+            MISSING_COUNT=$((MISSING_COUNT + 1))
+          else
+            echo "✅ Found: ATS_ROOT_PASSWORD"
+          fi
+          
+          if [ -z "$ACTIONS_USER_PASSWORD" ]; then
+            echo "❌ Missing: ACTIONS_USER_PASSWORD - Password for actions user account"
+            MISSING_COUNT=$((MISSING_COUNT + 1))
+          else
+            echo "✅ Found: ACTIONS_USER_PASSWORD"
+          fi
+          
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo ""
+            echo "❌ Missing $MISSING_COUNT required secret(s)"
+            echo "📋 To fix: Go to https://github.com/${{ github.repository }}/settings/secrets/actions"
+            exit 1
+          fi
+          
+          echo ""
+          echo "✅ All required secrets validated"
 
   # ============================================================================
   # Stage 1: Server Setup
