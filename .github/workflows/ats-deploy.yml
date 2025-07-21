@@ -10,7 +10,10 @@ on:
 jobs:
   setup-server:
     name: Setup Linode Server
-    runs-on: ubuntu-latest
+    #runs-on: ubuntu-latest
+    runs-on: self-hosted
+    outputs:
+      server_ip: ${{ steps.create.outputs.server_ip }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -27,16 +30,22 @@ jobs:
           LINODE_CLI_TOKEN: ${{ secrets.LINODE_TOKEN }}
 
       - name: Create Linode Server
+        id: create
         run: |
-          ./scripts/deployment/staged/stage-0-create-server-with-ssh.sh --force-new
+          ./scripts/deployment/create-ats-server.sh --force-new
+          # Extract server IP from the generated file
+          SERVER_IP=$(grep "SERVER_IP=" server-details.env | cut -d'=' -f2)
+          echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
         env:
           LINODE_CLI_TOKEN: ${{ secrets.LINODE_TOKEN }}
-          FKS_DEV_ROOT_PASSWORD: ${{ secrets.FKS_DEV_ROOT_PASSWORD }}
+          ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
           ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
 
   setup-ats:
     name: Setup ATS Dedicated Server
-    runs-on: ubuntu-latest
+    #runs-on: ubuntu-latest
+    runs-on: self-hosted
+
     needs: setup-server
     steps:
       - name: SSH and Install SteamCMD
@@ -44,7 +53,7 @@ jobs:
         with:
           host: ${{ needs.setup-server.outputs.server_ip }}
           username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          password: ${{ secrets.ATS_ROOT_PASSWORD }}
           script: |
             apt-get update && apt-get install -y steamcmd
             mkdir -p /home/ats-server
@@ -55,7 +64,7 @@ jobs:
         with:
           host: ${{ needs.setup-server.outputs.server_ip }}
           username: root
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          password: ${{ secrets.ATS_ROOT_PASSWORD }}
           script: |
             ufw allow 27015:27020/tcp
             ufw allow 27015:27020/udp
