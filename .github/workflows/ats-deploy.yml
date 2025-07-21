@@ -164,7 +164,7 @@ jobs:
           echo "default-user = DEFAULT" >> ~/.config/linode-cli/config
           echo "region = ca-central" >> ~/.config/linode-cli/config
           echo "type = g6-standard-1" >> ~/.config/linode-cli/config
-          echo "image = linode/arch" >> ~/.config/linode-cli/config
+          echo "image = linode/ubuntu22.04" >> ~/.config/linode-cli/config
           echo "token = ${{ secrets.LINODE_TOKEN }}" >> ~/.config/linode-cli/config
           chmod 600 ~/.config/linode-cli/config
           
@@ -226,11 +226,24 @@ jobs:
           username: root
           password: ${{ secrets.ATS_ROOT_PASSWORD }}
           script: |
-            # Update Arch Linux packages
-            pacman -Syu --noconfirm
-            
-            # Install required packages
-            pacman -S --noconfirm base-devel git wget curl lib32-gcc-libs
+            # Detect OS and install packages accordingly
+            if command -v pacman >/dev/null 2>&1; then
+              echo "Detected Arch Linux"
+              # Update Arch Linux packages
+              pacman -Syu --noconfirm
+              # Install required packages including 32-bit libraries
+              pacman -S --noconfirm base-devel git wget curl lib32-gcc-libs lib32-glibc
+            elif command -v apt-get >/dev/null 2>&1; then
+              echo "Detected Ubuntu/Debian"
+              # Enable 32-bit architecture
+              dpkg --add-architecture i386
+              apt-get update
+              # Install required packages
+              apt-get install -y wget curl lib32gcc-s1 lib32stdc++6 libc6-i386 lib32z1
+            else
+              echo "Unsupported OS"
+              exit 1
+            fi
             
             # Create ATS server directory
             mkdir -p /home/ats-server
@@ -239,6 +252,10 @@ jobs:
             # Download and extract SteamCMD
             wget https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
             tar -xvzf steamcmd_linux.tar.gz
+            
+            # Make steamcmd executable
+            chmod +x steamcmd.sh
+            chmod +x linux32/steamcmd
             
             # Install ATS Dedicated Server
             ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit

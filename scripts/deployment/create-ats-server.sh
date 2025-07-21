@@ -29,7 +29,7 @@ error() {
 SERVER_NAME="ats-server"
 SERVER_TYPE="g6-standard-1"  # $12/month - 2GB RAM, 1 CPU
 SERVER_REGION="ca-central"   # Toronto, Canada
-SERVER_IMAGE="linode/arch"
+SERVER_IMAGE="linode/ubuntu22.04"
 FORCE_NEW=false
 
 # Parse command line arguments
