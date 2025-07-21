@@ -1,0 +1,31 @@
+SiiNunit
+{
+server_config : .config {
+ lobby_name: "ATS Dedicated Server"                    // Session name, limited to 63 characters.
+ description: "American Truck Simulator Server"        // Session description, limited to 63 characters.
+ welcome_message: "Welcome to our ATS server!"         // Session welcome message, limited to 127 characters.
+ password: ""                                          // Session password, limited to 63 characters.
+ max_players: 8                                        // Maximum players in session, limit is 8 players.
+ max_vehicles_total: 100
+ max_ai_vehicles_player: 50
+ max_ai_vehicles_player_spawn: 50
+ connection_virtual_port: 100
+ query_virtual_port: 101
+ connection_dedicated_port: 27015
+ query_dedicated_port: 27016
+ server_logon_token: ""                                // Token for game server login (persistent account).
+ player_damage: true                                   // Flag if player can receive damage from other players.
+ traffic: true                                         // Flag if traffic is enabled.
+ hide_in_company: false                                // Flag if remote player are hidden in company area.
+ hide_colliding: true                                  // Flag to hide colliding vehicle after teleport. 
+ force_speed_limiter: false                            // Flag to force speed limiter.
+ mods_optioning: false                                 // Flag to enable mods marked as optional, to be really optional.
+ timezones: 2                                          // Values 0 - 2.
+ service_no_collision: false                           // Disable collisions on service area.
+ in_menu_ghosting: false                               // Disable collisions when game paused.
+ name_tags: true                                       // Show player name tags above vehicles.
+ friends_only: false                                   // Not used for dedicated server.
+ show_server: true                                     // Not used for dedicated server.
+ moderator_list: 0                                     // Default moderators count
+}
+}

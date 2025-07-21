@@ -1,0 +1,66 @@
+name: 🚀 ATS Dedicated Server Deployment on Linode
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  setup-server:
+    name: Setup Linode Server
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.9'
+
+      - name: Install Linode CLI
+        run: |
+          pip install linode-cli
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_TOKEN }}
+
+      - name: Create Linode Server
+        run: |
+          ./scripts/deployment/staged/stage-0-create-server-with-ssh.sh --force-new
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_TOKEN }}
+          FKS_DEV_ROOT_PASSWORD: ${{ secrets.FKS_DEV_ROOT_PASSWORD }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+
+  setup-ats:
+    name: Setup ATS Dedicated Server
+    runs-on: ubuntu-latest
+    needs: setup-server
+    steps:
+      - name: SSH and Install SteamCMD
+        uses: appleboy/ssh-action@v0.1.5
+        with:
+          host: ${{ needs.setup-server.outputs.server_ip }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            apt-get update && apt-get install -y steamcmd
+            mkdir -p /home/ats-server
+            steamcmd +login anonymous +force_install_dir /home/ats-server +app_update 2239530 validate +quit
+
+      - name: Configure and Start Server
+        uses: appleboy/ssh-action@v0.1.5
+        with:
+          host: ${{ needs.setup-server.outputs.server_ip }}
+          username: root
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            ufw allow 27015:27020/tcp
+            ufw allow 27015:27020/udp
+            echo 'server_config.sii contents' > /home/ats-server/server_config.sii
+            echo 'server_packages.sii contents' > /home/ats-server/server_packages.sii
+            chmod +x /home/ats-server/start_ats_server.sh
+            /home/ats-server/start_ats_server.sh
+
