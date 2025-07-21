@@ -27,8 +27,8 @@ error() {
 
 # Default values
 SERVER_NAME="ats-server"
-SERVER_TYPE="g6-standard-2"  # 4GB RAM, 2 CPUs
-SERVER_REGION="us-central"   # Change to your preferred region
+SERVER_TYPE="g6-standard-1"  # $12/month - 2GB RAM, 1 CPU
+SERVER_REGION="ca-central"   # Toronto, Canada
 SERVER_IMAGE="linode/arch"
 FORCE_NEW=false
 
