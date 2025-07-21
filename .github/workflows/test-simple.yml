@@ -1,0 +1,25 @@
+name: Test Simple Workflow
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Simple Test
+    runs-on: self-hosted
+    steps:
+      - name: Echo Test
+        run: |
+          echo "Test workflow is running"
+          echo "Runner: ${{ runner.name }}"
+          echo "Repository: ${{ github.repository }}"
+          
+      - name: Test Secret Access
+        env:
+          TEST_SECRET: ${{ secrets.LINODE_TOKEN }}
+        run: |
+          if [ -z "$TEST_SECRET" ]; then
+            echo "Secret is empty"
+          else
+            echo "Secret is available (length: ${#TEST_SECRET})"
+          fi

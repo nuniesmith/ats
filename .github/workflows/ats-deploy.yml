@@ -33,6 +33,25 @@ jobs:
       deployment_mode: ${{ steps.config.outputs.deployment_mode }}
       should_create_server: ${{ steps.config.outputs.should_create_server }}
     steps:
+      - name: 🔍 Debug Runner Environment
+        run: |
+          echo "🔍 Debugging runner environment..."
+          echo "Runner: ${{ runner.name }}"
+          echo "OS: ${{ runner.os }}"
+          echo "Workflow: ${{ github.workflow }}"
+          echo "Repository: ${{ github.repository }}"
+          echo "Event: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref }}"
+          echo "Current directory: $(pwd)"
+          echo "User: $(whoami)"
+          echo "PATH: $PATH"
+
+      - name: 🧪 Simple Test Step
+        run: |
+          echo "Testing basic execution..."
+          echo "This is a simple test"
+          exit 0
+
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
