@@ -164,7 +164,7 @@ jobs:
           echo "default-user = DEFAULT" >> ~/.config/linode-cli/config
           echo "region = ca-central" >> ~/.config/linode-cli/config
           echo "type = g6-standard-2" >> ~/.config/linode-cli/config
-          echo "image = linode/ubuntu22.04" >> ~/.config/linode-cli/config
+          echo "image = linode/arch" >> ~/.config/linode-cli/config
           echo "token = ${{ secrets.LINODE_TOKEN }}" >> ~/.config/linode-cli/config
           chmod 600 ~/.config/linode-cli/config
           
@@ -226,9 +226,22 @@ jobs:
           username: root
           password: ${{ secrets.ATS_ROOT_PASSWORD }}
           script: |
-            apt-get update && apt-get install -y steamcmd
+            # Update Arch Linux packages
+            pacman -Syu --noconfirm
+            
+            # Install required packages
+            pacman -S --noconfirm base-devel git wget curl lib32-gcc-libs
+            
+            # Create ATS server directory
             mkdir -p /home/ats-server
-            steamcmd +login anonymous +force_install_dir /home/ats-server +app_update 2239530 validate +quit
+            cd /home/ats-server
+            
+            # Download and extract SteamCMD
+            wget https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
+            tar -xvzf steamcmd_linux.tar.gz
+            
+            # Install ATS Dedicated Server
+            ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit
 
       - name: Configure and Start Server
         uses: appleboy/ssh-action@v0.1.5
@@ -237,10 +250,52 @@ jobs:
           username: root
           password: ${{ secrets.ATS_ROOT_PASSWORD }}
           script: |
-            ufw allow 27015:27020/tcp
-            ufw allow 27015:27020/udp
-            echo 'server_config.sii contents' > /home/ats-server/server_config.sii
-            echo 'server_packages.sii contents' > /home/ats-server/server_packages.sii
+            # Configure firewall (if ufw is installed)
+            if command -v ufw >/dev/null 2>&1; then
+              ufw allow 27015:27020/tcp
+              ufw allow 27015:27020/udp
+            else
+              # Use iptables directly on Arch
+              iptables -A INPUT -p tcp --dport 27015:27020 -j ACCEPT
+              iptables -A INPUT -p udp --dport 27015:27020 -j ACCEPT
+              iptables-save > /etc/iptables/iptables.rules
+              systemctl enable iptables
+            fi
+            
+            # Create server configuration
+            cat > /home/ats-server/server_config.sii << 'EOF'
+            SiiNunit
+            {
+            server_config : _nameless.server {
+             lobby_name: "ATS Dedicated Server"
+             description: "American Truck Simulator Server"
+             welcome_message: "Welcome to our ATS server!"
+             max_players: 8
+             max_vehicles_total: 100
+            }
+            }
+            EOF
+            
+            # Create server packages configuration
+            cat > /home/ats-server/server_packages.sii << 'EOF'
+            SiiNunit
+            {
+            server_packages : _nameless.server.packages {
+            }
+            }
+            EOF
+            
+            # Create start script
+            cat > /home/ats-server/start_ats_server.sh << 'EOF'
+            #!/bin/bash
+            cd /home/ats-server
+            ./bin/linux_x64/amtrucks_server -server -dedicated
+            EOF
+            
             chmod +x /home/ats-server/start_ats_server.sh
-            /home/ats-server/start_ats_server.sh
+            
+            # Start the server
+            cd /home/ats-server
+            nohup ./start_ats_server.sh > server.log 2>&1 &
+            echo "ATS server started!"
 

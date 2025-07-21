@@ -29,7 +29,7 @@ error() {
 SERVER_NAME="ats-server"
 SERVER_TYPE="g6-standard-2"  # 4GB RAM, 2 CPUs
 SERVER_REGION="us-central"   # Change to your preferred region
-SERVER_IMAGE="linode/ubuntu22.04"
+SERVER_IMAGE="linode/arch"
 FORCE_NEW=false
 
 # Parse command line arguments
@@ -142,7 +142,10 @@ SERVER_IP=$SERVER_IP
 SERVER_NAME=$SERVER_NAME
 SERVER_TYPE=$SERVER_TYPE
 SERVER_REGION=$SERVER_REGION
+SERVER_IMAGE=$SERVER_IMAGE
+IS_NEW_SERVER=$([[ -n "$EXISTING_SERVER" ]] && echo "false" || echo "true")
 CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+TARGET_HOST=$SERVER_IP
 EOF
 
 log "Server ready!"
