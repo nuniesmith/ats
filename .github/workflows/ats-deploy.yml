@@ -6,40 +6,182 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      deployment_mode:
+        description: 'Deployment mode'
+        required: true
+        type: choice
+        options:
+          - 'full-deploy'
+          - 'test-only'
+          - 'server-only'
+        default: 'full-deploy'
+      create_new_server:
+        description: 'Create new Linode server'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
-  setup-server:
-    name: Setup Linode Server
-    #runs-on: ubuntu-latest
+  # ============================================================================
+  # Stage 0: Pre-flight Checks & Validation
+  # ============================================================================
+  preflight-checks:
+    name: 🛫 Pre-flight Checks
     runs-on: self-hosted
     outputs:
-      server_ip: ${{ steps.create.outputs.server_ip }}
+      deployment_mode: ${{ steps.config.outputs.deployment_mode }}
+      should_create_server: ${{ steps.config.outputs.should_create_server }}
     steps:
-      - name: Checkout Code
+      - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v3
-        with:
-          python-version: '3.9'
-
-      - name: Install Linode CLI
+      - name: 🔧 Configure deployment
+        id: config
         run: |
-          pip install linode-cli
-        env:
-          LINODE_CLI_TOKEN: ${{ secrets.LINODE_TOKEN }}
+          echo "🎯 Configuring deployment..."
+          DEPLOYMENT_MODE="${{ github.event.inputs.deployment_mode || 'full-deploy' }}"
+          SHOULD_CREATE="${{ github.event.inputs.create_new_server || 'false' }}"
+          
+          echo "deployment_mode=$DEPLOYMENT_MODE" >> $GITHUB_OUTPUT
+          echo "should_create_server=$SHOULD_CREATE" >> $GITHUB_OUTPUT
+          
+          echo "📋 Deployment Configuration:"
+          echo "  - Mode: $DEPLOYMENT_MODE"
+          echo "  - Create new server: $SHOULD_CREATE"
 
-      - name: Create Linode Server
+      - name: 🔐 Validate Required Secrets
+        run: |
+          echo "🔐 Validating required secrets..."
+          
+          MISSING_SECRETS=()
+          
+          # Check required secrets
+          declare -A REQUIRED_SECRETS=(
+            ["LINODE_TOKEN"]="Linode API token for server provisioning"
+            ["ATS_ROOT_PASSWORD"]="Root password for ATS server"
+            ["ACTIONS_USER_PASSWORD"]="Password for actions user account"
+          )
+          
+          for secret in "${!REQUIRED_SECRETS[@]}"; do
+            if [ -z "${!secret}" ]; then
+              MISSING_SECRETS+=("$secret")
+              echo "❌ Missing: $secret - ${REQUIRED_SECRETS[$secret]}"
+            else
+              echo "✅ Found: $secret"
+            fi
+          done
+          
+          if [ ${#MISSING_SECRETS[@]} -gt 0 ]; then
+            echo ""
+            echo "❌ Missing ${#MISSING_SECRETS[@]} required secret(s)"
+            echo "📋 To fix: Go to https://github.com/${{ github.repository }}/settings/secrets/actions"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets validated"
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+
+  # ============================================================================
+  # Stage 1: Server Setup
+  # ============================================================================
+  setup-server:
+    name: 🏗️ Setup Linode Server
+    runs-on: self-hosted
+    needs: [preflight-checks]
+    if: needs.preflight-checks.outputs.deployment_mode != 'test-only'
+    outputs:
+      server_ip: ${{ steps.server-result.outputs.server_ip }}
+      server_id: ${{ steps.server-result.outputs.server_id }}
+      server_created: ${{ steps.server-result.outputs.server_created }}
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Environment
+        run: |
+          echo "🔧 Setting up environment..."
+          
+          # Ensure script is executable
+          if [ -f "scripts/deployment/create-ats-server.sh" ]; then
+            chmod +x scripts/deployment/create-ats-server.sh
+          else
+            echo "❌ Deployment script not found!"
+            exit 1
+          fi
+          
+          # Install required tools
+          if ! command -v pip3 &>/dev/null; then
+            if command -v pacman >/dev/null 2>&1; then
+              sudo -n pacman -S --noconfirm python python-pip
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo -n apt-get update && sudo -n apt-get install -y python3 python3-pip
+            fi
+          fi
+          
+          # Install Linode CLI
+          echo "📦 Installing Linode CLI..."
+          pip3 install --user linode-cli --quiet
+          export PATH="$HOME/.local/bin:$PATH"
+          echo "PATH=$HOME/.local/bin:$PATH" >> $GITHUB_ENV
+          
+          # Configure Linode CLI to avoid interactive prompts
+          echo "🔧 Configuring Linode CLI..."
+          mkdir -p ~/.config/linode-cli
+          echo "[DEFAULT]" > ~/.config/linode-cli/config
+          echo "default-user = DEFAULT" >> ~/.config/linode-cli/config
+          echo "region = ca-central" >> ~/.config/linode-cli/config
+          echo "type = g6-standard-2" >> ~/.config/linode-cli/config
+          echo "image = linode/ubuntu22.04" >> ~/.config/linode-cli/config
+          echo "token = ${{ secrets.LINODE_TOKEN }}" >> ~/.config/linode-cli/config
+          chmod 600 ~/.config/linode-cli/config
+          
+          echo "✅ Environment setup complete"
+
+      - name: 🚀 Create/Detect Server
         id: create
         run: |
-          ./scripts/deployment/create-ats-server.sh --force-new
-          # Extract server IP from the generated file
-          SERVER_IP=$(grep "SERVER_IP=" server-details.env | cut -d'=' -f2)
-          echo "server_ip=$SERVER_IP" >> $GITHUB_OUTPUT
+          echo "🚀 Running server creation/detection..."
+          
+          CREATE_FLAG=""
+          if [ "${{ needs.preflight-checks.outputs.should_create_server }}" == "true" ]; then
+            CREATE_FLAG="--force-new"
+          fi
+          
+          # Run the server creation script
+          ./scripts/deployment/create-ats-server.sh $CREATE_FLAG
+          
+          # Check if server details were generated
+          if [ -f "server-details.env" ]; then
+            source server-details.env
+            echo "server_ip=${SERVER_IP:-}" >> $GITHUB_OUTPUT
+            echo "server_id=${SERVER_ID:-unknown}" >> $GITHUB_OUTPUT
+            echo "server_created=${IS_NEW_SERVER:-false}" >> $GITHUB_OUTPUT
+            echo "✅ Server details captured"
+          else
+            echo "❌ Server details not found"
+            exit 1
+          fi
         env:
           LINODE_CLI_TOKEN: ${{ secrets.LINODE_TOKEN }}
           ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
           ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+
+      - name: 📊 Server Setup Results
+        id: server-result
+        if: always()
+        run: |
+          echo "server_ip=${{ steps.create.outputs.server_ip }}" >> $GITHUB_OUTPUT
+          echo "server_id=${{ steps.create.outputs.server_id }}" >> $GITHUB_OUTPUT
+          echo "server_created=${{ steps.create.outputs.server_created }}" >> $GITHUB_OUTPUT
+          
+          echo "📊 Server Setup Summary:"
+          echo "  - Server IP: ${{ steps.create.outputs.server_ip }}"
+          echo "  - Server ID: ${{ steps.create.outputs.server_id }}"
+          echo "  - New Server: ${{ steps.create.outputs.server_created }}"
 
   setup-ats:
     name: Setup ATS Dedicated Server
