@@ -164,7 +164,7 @@ jobs:
           echo "default-user = DEFAULT" >> ~/.config/linode-cli/config
           echo "region = ca-central" >> ~/.config/linode-cli/config
           echo "type = g6-standard-1" >> ~/.config/linode-cli/config
-          echo "image = linode/ubuntu22.04" >> ~/.config/linode-cli/config
+          echo "image = linode/ubuntu24.04" >> ~/.config/linode-cli/config
           echo "token = ${{ secrets.LINODE_TOKEN }}" >> ~/.config/linode-cli/config
           chmod 600 ~/.config/linode-cli/config
           
