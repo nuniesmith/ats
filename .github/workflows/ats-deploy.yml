@@ -32,6 +32,9 @@ jobs:
     outputs:
       deployment_mode: ${{ steps.config.outputs.deployment_mode }}
       should_create_server: ${{ steps.config.outputs.should_create_server }}
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - name: 🔍 Debug Runner Environment
         run: |

@@ -7,6 +7,9 @@ jobs:
   test:
     name: Simple Test
     runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - name: Echo Test
         run: |
