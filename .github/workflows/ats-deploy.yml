@@ -411,10 +411,35 @@ jobs:
             # Check if ATS server is already installed
             if [ -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
               echo "ATS Dedicated Server already installed, checking for updates..."
-              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 +quit
+              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 +quit || {
+                EXIT_CODE=$?
+                if [ $EXIT_CODE -eq 3 ]; then
+                  echo "SteamCMD exited with code 3 (expected after self-update)"
+                else
+                  echo "SteamCMD failed with exit code: $EXIT_CODE"
+                  exit $EXIT_CODE
+                fi
+              }
             else
               echo "Installing ATS Dedicated Server..."
-              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit
+              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit || {
+                EXIT_CODE=$?
+                if [ $EXIT_CODE -eq 3 ]; then
+                  echo "SteamCMD exited with code 3 (expected after self-update)"
+                else
+                  echo "SteamCMD failed with exit code: $EXIT_CODE"
+                  exit $EXIT_CODE
+                fi
+              }
+            fi
+            
+            # Verify ATS server was installed/updated
+            if [ -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
+              echo "✅ ATS Dedicated Server is ready!"
+              ls -la /home/ats-server/bin/linux_x64/amtrucks_server
+            else
+              echo "❌ ATS server binary not found after installation!"
+              exit 1
             fi
 
       - name: Deploy Configuration Files
