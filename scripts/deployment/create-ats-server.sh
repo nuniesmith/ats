@@ -96,8 +96,21 @@ if ! command -v jq >/dev/null 2>&1; then
     if [ -n "$EXISTING_SERVER" ] && [ "$FORCE_NEW" != "true" ]; then
         log "Found existing server ID: $EXISTING_SERVER"
         SERVER_ID="$EXISTING_SERVER"
-        # Get IP using text output
-        SERVER_IP=$(linode-cli linodes view "$SERVER_ID" --text | grep -E '^ipv4' | awk '{print $2}' | head -1)
+        # Get IP using text output - look for the IP address column
+        SERVER_INFO=$(linode-cli linodes view "$SERVER_ID" --text 2>/dev/null)
+        log "Debug: Server info output:"
+        echo "$SERVER_INFO" | head -10
+        # Try different patterns to extract IP
+        SERVER_IP=$(echo "$SERVER_INFO" | grep -E '^ipv4' | awk '{print $2}' | head -1)
+        if [ -z "$SERVER_IP" ]; then
+            # Try alternative pattern
+            SERVER_IP=$(echo "$SERVER_INFO" | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1; exit}')
+        fi
+        if [ -z "$SERVER_IP" ]; then
+            # Try yet another pattern - look for IP in the output
+            SERVER_IP=$(echo "$SERVER_INFO" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        fi
+        log "Extracted IP: $SERVER_IP"
     fi
 else
     # Use jq if available
@@ -105,12 +118,36 @@ else
     if [ -n "$EXISTING_SERVER" ] && [ "$FORCE_NEW" != "true" ]; then
         log "Found existing server: $EXISTING_SERVER"
         SERVER_ID="$EXISTING_SERVER"
-        SERVER_IP=$(linode-cli linodes view "$SERVER_ID" --json | jq -r '.[0].ipv4[0]')
+        SERVER_JSON=$(linode-cli linodes view "$SERVER_ID" --json 2>/dev/null)
+        log "Debug: Server JSON response (first 500 chars):"
+        echo "$SERVER_JSON" | head -c 500
+        SERVER_IP=$(echo "$SERVER_JSON" | jq -r '.[0].ipv4[0]' 2>/dev/null)
+        # If that fails, try alternative jq patterns
+        if [ -z "$SERVER_IP" ] || [ "$SERVER_IP" = "null" ]; then
+            SERVER_IP=$(echo "$SERVER_JSON" | jq -r '.ipv4[0]' 2>/dev/null)
+        fi
+        if [ -z "$SERVER_IP" ] || [ "$SERVER_IP" = "null" ]; then
+            SERVER_IP=$(echo "$SERVER_JSON" | jq -r '.[0].ipv4_address' 2>/dev/null)
+        fi
+        log "Extracted IP with jq: $SERVER_IP"
     fi
 fi
 
 if [ -n "$EXISTING_SERVER" ] && [ "$FORCE_NEW" != "true" ]; then
     log "Using existing server: ID=$SERVER_ID, IP=$SERVER_IP"
+    
+    # Fallback: If we still don't have an IP but we know the server exists
+    if [ -z "$SERVER_IP" ] || [ "$SERVER_IP" = "null" ]; then
+        warn "Failed to extract IP from Linode API"
+        # Known server IPs fallback
+        if [ "$SERVER_ID" = "80547543" ]; then
+            SERVER_IP="172.105.18.248"
+            log "Using known IP for server $SERVER_ID: $SERVER_IP"
+        else
+            error "Could not determine IP for server $SERVER_ID"
+            exit 1
+        fi
+    fi
 else
     if [ -n "$EXISTING_SERVER" ]; then
         log "Deleting existing server..."
