@@ -13,7 +13,7 @@ server_config : .config {
  query_virtual_port: 101
  connection_dedicated_port: 27015
  query_dedicated_port: 27016
- server_logon_token: ""                                // Token for game server login (persistent account).
+ server_logon_token: "15AE684920A1694E27BFA8B64F75AD1B"   // Token for game server login (persistent account).
  player_damage: true                                   // Flag if player can receive damage from other players.
  traffic: true                                         // Flag if traffic is enabled.
  hide_in_company: false                                // Flag if remote player are hidden in company area.
