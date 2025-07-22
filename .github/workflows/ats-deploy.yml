@@ -351,9 +351,12 @@ jobs:
               exit 1
             fi
             
-            # Create ATS server directory
+            # Create directories
+            mkdir -p /home/steamcmd
             mkdir -p /home/ats-server
-            cd /home/ats-server
+            
+            # Download and setup SteamCMD in its own directory
+            cd /home/steamcmd
             
             # Check if SteamCMD already exists
             if [ ! -f steamcmd.sh ]; then
@@ -369,29 +372,26 @@ jobs:
             chmod +x steamcmd.sh
             [ -f linux32/steamcmd ] && chmod +x linux32/steamcmd
             
+            # Run SteamCMD from its directory
+            cd /home/steamcmd
+            
             # Check if ATS server is already installed
             if [ -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
               echo "ATS Dedicated Server already installed, checking for updates..."
-              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 +quit || {
-                EXIT_CODE=$?
-                if [ $EXIT_CODE -eq 3 ]; then
-                  echo "SteamCMD exited with code 3 (expected after self-update)"
-                else
-                  echo "SteamCMD failed with exit code: $EXIT_CODE"
-                  exit $EXIT_CODE
-                fi
-              }
+              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 +quit
             else
               echo "Installing ATS Dedicated Server..."
-              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit || {
-                EXIT_CODE=$?
-                if [ $EXIT_CODE -eq 3 ]; then
-                  echo "SteamCMD exited with code 3 (expected after self-update)"
-                else
-                  echo "SteamCMD failed with exit code: $EXIT_CODE"
-                  exit $EXIT_CODE
-                fi
-              }
+              echo "This may take several minutes..."
+              
+              # Run SteamCMD with explicit commands
+              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit
+              
+              # Check exit code but don't fail on code 0 or 3
+              EXIT_CODE=$?
+              if [ $EXIT_CODE -ne 0 ] && [ $EXIT_CODE -ne 3 ]; then
+                echo "SteamCMD failed with exit code: $EXIT_CODE"
+                exit $EXIT_CODE
+              fi
             fi
             
             # Wait a moment for files to settle
