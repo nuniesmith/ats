@@ -158,32 +158,71 @@ jobs:
             exit 1
           fi
           
-          # Ensure pip is available using ensurepip if needed
-          echo "🔍 Checking for pip..."
-          if ! $PYTHON_CMD -m pip --version >/dev/null 2>&1; then
-            echo "⚠️ pip not found, trying to install via ensurepip..."
-            $PYTHON_CMD -m ensurepip --upgrade || {
-              echo "❌ Failed to install pip"
-              echo "Please ensure pip is available on the runner"
-              exit 1
+          # Detect if we're on Arch Linux with externally managed environment
+          if [ -f /etc/arch-release ] && [ -f /usr/lib/python*/EXTERNALLY-MANAGED ]; then
+            echo "🔍 Detected Arch Linux with externally managed Python environment"
+            
+            # Check if linode-cli is already installed via system package manager
+            if command -v linode-cli >/dev/null 2>&1; then
+              echo "✅ Linode CLI already installed system-wide"
+            else
+              # Check if pipx is available
+              if command -v pipx >/dev/null 2>&1; then
+                echo "📦 Installing Linode CLI via pipx..."
+                pipx install linode-cli
+                echo "✅ Linode CLI installed via pipx"
+              else
+                # Use virtual environment as fallback
+                echo "📦 Creating virtual environment for Linode CLI..."
+                $PYTHON_CMD -m venv ~/.venv/linode-cli
+                source ~/.venv/linode-cli/bin/activate
+                
+                # Upgrade pip in venv
+                python -m pip install --upgrade pip --quiet
+                
+                # Install Linode CLI in venv
+                python -m pip install linode-cli --quiet
+                
+                # Create wrapper script
+                mkdir -p ~/.local/bin
+                echo '#!/bin/bash' > ~/.local/bin/linode-cli
+                echo 'source ~/.venv/linode-cli/bin/activate' >> ~/.local/bin/linode-cli
+                echo 'linode-cli "$@"' >> ~/.local/bin/linode-cli
+                chmod +x ~/.local/bin/linode-cli
+                
+                echo "✅ Linode CLI installed in virtual environment"
+              fi
+            fi
+          else
+            # Non-Arch Linux or no external management
+            echo "🔍 Standard Python environment detected"
+            
+            # Ensure pip is available
+            if ! $PYTHON_CMD -m pip --version >/dev/null 2>&1; then
+              echo "⚠️ pip not found, trying to install via ensurepip..."
+              $PYTHON_CMD -m ensurepip --upgrade || {
+                echo "❌ Failed to install pip"
+                echo "Please ensure pip is available on the runner"
+                exit 1
+              }
+            fi
+            
+            echo "✅ pip is available: $($PYTHON_CMD -m pip --version)"
+            
+            # Upgrade pip first
+            echo "🔧 Upgrading pip..."
+            $PYTHON_CMD -m pip install --upgrade pip --quiet
+            
+            # Install Linode CLI using python -m pip
+            echo "📦 Installing Linode CLI..."
+            $PYTHON_CMD -m pip install --user linode-cli --quiet || {
+              echo "⚠️ Failed to install with --user, trying without..."
+              $PYTHON_CMD -m pip install linode-cli --quiet || {
+                echo "❌ Failed to install Linode CLI"
+                exit 1
+              }
             }
           fi
-          
-          echo "✅ pip is available: $($PYTHON_CMD -m pip --version)"
-          
-          # Upgrade pip first
-          echo "🖄 Upgrading pip..."
-          $PYTHON_CMD -m pip install --upgrade pip --quiet
-          
-          # Install Linode CLI using python -m pip
-          echo "📦 Installing Linode CLI..."
-          $PYTHON_CMD -m pip install --user linode-cli --quiet || {
-            echo "⚠️ Failed to install with --user, trying without..."
-            $PYTHON_CMD -m pip install linode-cli --quiet || {
-              echo "❌ Failed to install Linode CLI"
-              exit 1
-            }
-          }
           
           # Update PATH for both possible locations
           export PATH="$HOME/.local/bin:$PATH:/usr/local/bin"
