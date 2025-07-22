@@ -144,33 +144,45 @@ jobs:
             exit 1
           fi
           
-          # Check for Python/pip installation
-          echo "🔍 Checking for Python and pip..."
+          # Check for Python installation
+          echo "🔍 Checking for Python..."
           if command -v python3 >/dev/null 2>&1; then
             echo "✅ Python3 found: $(python3 --version)"
+            PYTHON_CMD="python3"
           elif command -v python >/dev/null 2>&1; then
             echo "✅ Python found: $(python --version)"
+            PYTHON_CMD="python"
           else
-            echo "⚠️ Python not found - will try to proceed anyway"
-          fi
-          
-          if command -v pip3 >/dev/null 2>&1; then
-            echo "✅ pip3 found: $(pip3 --version)"
-            PIP_CMD="pip3"
-          elif command -v pip >/dev/null 2>&1; then
-            echo "✅ pip found: $(pip --version)"
-            PIP_CMD="pip"
-          else
-            echo "❌ pip not found - cannot install Linode CLI"
-            echo "Please ensure Python and pip are installed on the runner"
+            echo "❌ Python not found - cannot proceed"
+            echo "Please ensure Python is installed on the runner"
             exit 1
           fi
           
-          # Install Linode CLI
+          # Ensure pip is available using ensurepip if needed
+          echo "🔍 Checking for pip..."
+          if ! $PYTHON_CMD -m pip --version >/dev/null 2>&1; then
+            echo "⚠️ pip not found, trying to install via ensurepip..."
+            $PYTHON_CMD -m ensurepip --upgrade || {
+              echo "❌ Failed to install pip"
+              echo "Please ensure pip is available on the runner"
+              exit 1
+            }
+          fi
+          
+          echo "✅ pip is available: $($PYTHON_CMD -m pip --version)"
+          
+          # Upgrade pip first
+          echo "🖄 Upgrading pip..."
+          $PYTHON_CMD -m pip install --upgrade pip --quiet
+          
+          # Install Linode CLI using python -m pip
           echo "📦 Installing Linode CLI..."
-          $PIP_CMD install --user linode-cli --quiet || {
+          $PYTHON_CMD -m pip install --user linode-cli --quiet || {
             echo "⚠️ Failed to install with --user, trying without..."
-            $PIP_CMD install linode-cli --quiet
+            $PYTHON_CMD -m pip install linode-cli --quiet || {
+              echo "❌ Failed to install Linode CLI"
+              exit 1
+            }
           }
           
           # Update PATH for both possible locations
