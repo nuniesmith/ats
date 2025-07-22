@@ -394,16 +394,28 @@ jobs:
             mkdir -p /home/ats-server
             cd /home/ats-server
             
-            # Download and extract SteamCMD
-            wget https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
-            tar -xvzf steamcmd_linux.tar.gz
+            # Check if SteamCMD already exists
+            if [ ! -f steamcmd.sh ]; then
+              echo "Downloading SteamCMD..."
+              wget https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
+              tar -xvzf steamcmd_linux.tar.gz
+              rm -f steamcmd_linux.tar.gz
+            else
+              echo "SteamCMD already exists, skipping download"
+            fi
             
             # Make steamcmd executable
             chmod +x steamcmd.sh
-            chmod +x linux32/steamcmd
+            [ -f linux32/steamcmd ] && chmod +x linux32/steamcmd
             
-            # Install ATS Dedicated Server
-            ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit
+            # Check if ATS server is already installed
+            if [ -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
+              echo "ATS Dedicated Server already installed, checking for updates..."
+              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 +quit
+            else
+              echo "Installing ATS Dedicated Server..."
+              ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit
+            fi
 
       - name: Deploy Configuration Files
         run: |
