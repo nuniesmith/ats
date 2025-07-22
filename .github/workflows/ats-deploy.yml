@@ -468,8 +468,21 @@ jobs:
             
             # Kill any existing ATS server processes
             echo "Stopping any existing ATS server processes..."
-            pkill -f amtrucks_server || true
-            sleep 2
+            # Kill any existing screen sessions first
+            if screen -list | grep -q "ats-server"; then
+              echo "Found existing screen session, terminating..."
+              screen -S ats-server -X quit
+              sleep 2
+            fi
+            
+            # Then kill any remaining server processes
+            if pgrep -f amtrucks_server > /dev/null; then
+              echo "Found running ATS server process, terminating..."
+              pkill -f amtrucks_server || true
+              sleep 2
+            else
+              echo "No existing ATS server process found"
+            fi
             
             # Verify all required files exist
             echo "Verifying required files..."
@@ -571,12 +584,21 @@ jobs:
             
             echo ""
             echo "📋 Server Information:"
-            echo "  - Server PID: $SERVER_PID"
             echo "  - Log file: /home/ats-server/logs/server.log"
             echo "  - Config: /home/ats-server/server_config.sii"
             echo "  - Server packages: /home/ats-server/server_packages.sii"
             echo ""
-            echo "To monitor logs: tail -f /home/ats-server/logs/server.log"
+            echo "To monitor logs: screen -r ats-server"
+            echo "To detach from screen: Ctrl+A, then D"
+            
+            # Final status check
+            echo ""
+            echo "🏁 Final status check:"
+            if screen -list | grep -q "ats-server" && pgrep -f amtrucks_server > /dev/null; then
+              echo "✅ ATS server is running successfully!"
+            else
+              echo "⚠️ Server may have issues, please check logs"
+            fi
 
       - name: 🔍 Verify Server Accessibility
         uses: appleboy/ssh-action@v0.1.5
