@@ -442,36 +442,138 @@ jobs:
               # Use iptables directly on Arch
               iptables -A INPUT -p tcp --dport 27015:27020 -j ACCEPT
               iptables -A INPUT -p udp --dport 27015:27020 -j ACCEPT
-              iptables-save > /etc/iptables/iptables.rules
-              systemctl enable iptables
+              iptables-save > /etc/iptables/iptables.rules 2>/dev/null || true
+              systemctl enable iptables 2>/dev/null || true
             fi
             
-            # Create logs directory
+            # Create necessary directories
             mkdir -p /home/ats-server/logs
+            mkdir -p /home/ats-server/.local/share/American Truck Simulator/profiles
             
-            # Check if server_packages files exist
+            # Kill any existing ATS server processes
+            echo "Stopping any existing ATS server processes..."
+            pkill -f amtrucks_server || true
+            sleep 2
+            
+            # Verify all required files exist
+            echo "Verifying required files..."
+            MISSING_FILES=0
+            
             if [ ! -f /home/ats-server/server_packages.dat ]; then
-              echo "ERROR: server_packages.dat not found!"
-              exit 1
+              echo "❌ ERROR: server_packages.dat not found!"
+              MISSING_FILES=$((MISSING_FILES + 1))
+            else
+              echo "✅ server_packages.dat found ($(stat -c%s /home/ats-server/server_packages.dat) bytes)"
             fi
             
             if [ ! -f /home/ats-server/server_packages.sii ]; then
-              echo "ERROR: server_packages.sii not found!"
+              echo "❌ ERROR: server_packages.sii not found!"
+              MISSING_FILES=$((MISSING_FILES + 1))
+            else
+              echo "✅ server_packages.sii found ($(stat -c%s /home/ats-server/server_packages.sii) bytes)"
+            fi
+            
+            if [ ! -f /home/ats-server/server_config.sii ]; then
+              echo "❌ ERROR: server_config.sii not found!"
+              MISSING_FILES=$((MISSING_FILES + 1))
+            else
+              echo "✅ server_config.sii found"
+            fi
+            
+            if [ $MISSING_FILES -gt 0 ]; then
+              echo "❌ Cannot start server: $MISSING_FILES required files missing"
               exit 1
             fi
             
             # Start the server
             cd /home/ats-server
+            
+            # Set up environment
+            export LD_LIBRARY_PATH=/home/ats-server/linux64:/home/ats-server:$LD_LIBRARY_PATH
+            
+            # Start server using the startup script if available
             if [ -f ./start_ats_server.sh ]; then
-              nohup ./start_ats_server.sh > logs/server.log 2>&1 &
-              echo "ATS server started with custom script!"
+              echo "Starting ATS server with custom script..."
+              chmod +x ./start_ats_server.sh
+              nohup ./start_ats_server.sh > /tmp/ats_startup.log 2>&1 &
+              SERVER_PID=$!
             else
-              # Fallback to direct command
-              export LD_LIBRARY_PATH=/home/ats-server/linux64:$LD_LIBRARY_PATH
-              nohup ./bin/linux_x64/amtrucks_server -server /home/ats-server/server_packages.sii -server_cfg /home/ats-server/server_config.sii -homedir /home/ats-server -nosingle > logs/server.log 2>&1 &
-              echo "ATS server started with direct command!"
+              # Direct command fallback
+              echo "Starting ATS server with direct command..."
+              nohup ./bin/linux_x64/amtrucks_server \
+                -server /home/ats-server/server_packages.sii \
+                -server_cfg /home/ats-server/server_config.sii \
+                -homedir /home/ats-server \
+                -nosingle > logs/server.log 2>&1 &
+              SERVER_PID=$!
             fi
             
-            echo "Server PID: $!"
-            echo "Check logs at: /home/ats-server/logs/server.log"
+            echo "Server started with PID: $SERVER_PID"
+            
+            # Wait a bit and check if server is still running
+            sleep 10
+            
+            if ps -p $SERVER_PID > /dev/null; then
+              echo "✅ Server is running!"
+              echo "Server process details:"
+              ps -fp $SERVER_PID
+            else
+              echo "❌ Server process died!"
+              echo "Last 50 lines of server log:"
+              tail -50 /home/ats-server/logs/server.log
+              exit 1
+            fi
+            
+            echo ""
+            echo "📋 Server Information:"
+            echo "  - Server PID: $SERVER_PID"
+            echo "  - Log file: /home/ats-server/logs/server.log"
+            echo "  - Config: /home/ats-server/server_config.sii"
+            echo "  - Server packages: /home/ats-server/server_packages.sii"
+            echo ""
+            echo "To monitor logs: tail -f /home/ats-server/logs/server.log"
+
+      - name: 🔍 Verify Server Accessibility
+        uses: appleboy/ssh-action@v0.1.5
+        with:
+          host: ${{ needs.setup-server.outputs.server_ip }}
+          username: root
+          password: ${{ secrets.ATS_ROOT_PASSWORD }}
+          script: |
+            echo "🔍 Verifying server accessibility..."
+            
+            # Check if server is listening on the expected ports
+            echo "Checking listening ports..."
+            netstat -tlnp | grep -E ":(27015|27016)" || {
+              echo "⚠️ Server ports not found in netstat"
+            }
+            
+            # Check server process
+            echo ""
+            echo "Checking server process..."
+            if pgrep -f amtrucks_server > /dev/null; then
+              echo "✅ ATS server process is running"
+              echo "Process details:"
+              ps aux | grep amtrucks_server | grep -v grep
+            else
+              echo "❌ ATS server process not found!"
+            fi
+            
+            # Show last few lines of log
+            echo ""
+            echo "📄 Last 20 lines of server log:"
+            tail -20 /home/ats-server/logs/server.log
+            
+            echo ""
+            echo "🎮 Server Status Summary:"
+            echo "  - Server IP: ${{ needs.setup-server.outputs.server_ip }}"
+            echo "  - Domain: ats.7gram.xyz"
+            echo "  - Game Port: 27015"
+            echo "  - Query Port: 27016"
+            echo "  - Password: ruby"
+            echo ""
+            echo "🔗 Connection methods:"
+            echo "  1. Find 'Freddy's ATS Dedicated Server' in the server browser"
+            echo "  2. Console: connect ${{ needs.setup-server.outputs.server_ip }}:27015"
+            echo "  3. Console: connect ats.7gram.xyz:27015"
 
