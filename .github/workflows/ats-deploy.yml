@@ -323,46 +323,7 @@ jobs:
           fi
           
           echo "✅ Server IP: $SERVER_IP"
-          
-          # Install nc if not present
-          if ! command -v nc >/dev/null 2>&1; then
-            echo "📦 Installing netcat..."
-            if [ -f /etc/arch-release ]; then
-              pacman -S --noconfirm gnu-netcat 2>/dev/null || echo "⚠️ Could not install netcat"
-            elif command -v apt-get >/dev/null 2>&1; then
-              apt-get update && apt-get install -y netcat 2>/dev/null || echo "⚠️ Could not install netcat"
-            fi
-          fi
-          
-          # Test SSH connectivity
-          echo "🔍 Testing SSH connectivity to $SERVER_IP:22..."
-          SSH_READY=false
-          for i in {1..5}; do
-            if command -v nc >/dev/null 2>&1; then
-              if nc -zv $SERVER_IP 22 2>&1 | grep -q succeeded; then
-                echo "✅ SSH port is open"
-                SSH_READY=true
-                break
-              else
-                echo "⏳ Waiting for SSH to be ready... (attempt $i/5)"
-                sleep 10
-              fi
-            else
-              # Fallback to curl if nc is not available
-              if curl -s --connect-timeout 5 telnet://$SERVER_IP:22 2>&1 | grep -q SSH; then
-                echo "✅ SSH port is open (verified with curl)"
-                SSH_READY=true
-                break
-              else
-                echo "⏳ Waiting for SSH to be ready... (attempt $i/5)"
-                sleep 10
-              fi
-            fi
-          done
-          
-          if [ "$SSH_READY" != "true" ]; then
-            echo "⚠️ SSH connectivity test failed, but continuing anyway..."
-          fi
+          echo "📝 Skipping SSH connectivity test - proceeding directly to deployment"
         
       - name: SSH and Install SteamCMD
         uses: appleboy/ssh-action@v0.1.5
