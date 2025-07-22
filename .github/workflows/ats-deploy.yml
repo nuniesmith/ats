@@ -219,6 +219,9 @@ jobs:
 
     needs: setup-server
     steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        
       - name: SSH and Install SteamCMD
         uses: appleboy/ssh-action@v0.1.5
         with:
@@ -260,6 +263,16 @@ jobs:
             # Install ATS Dedicated Server
             ./steamcmd.sh +force_install_dir /home/ats-server +login anonymous +app_update 2239530 validate +quit
 
+      - name: Deploy Configuration Files
+        run: |
+          # Make deployment script executable
+          chmod +x scripts/deployment/deploy-ats-configs.sh
+          
+          # Deploy configuration files
+          ./scripts/deployment/deploy-ats-configs.sh ${{ needs.setup-server.outputs.server_ip }}
+        env:
+          SSHPASS: ${{ secrets.ATS_ROOT_PASSWORD }}
+
       - name: Configure and Start Server
         uses: appleboy/ssh-action@v0.1.5
         with:
@@ -279,40 +292,32 @@ jobs:
               systemctl enable iptables
             fi
             
-            # Create server configuration
-            cat > /home/ats-server/server_config.sii << 'EOF'
-            SiiNunit
-            {
-            server_config : _nameless.server {
-             lobby_name: "ATS Dedicated Server"
-             description: "American Truck Simulator Server"
-             welcome_message: "Welcome to our ATS server!"
-             max_players: 8
-             max_vehicles_total: 100
-            }
-            }
-            EOF
+            # Create logs directory
+            mkdir -p /home/ats-server/logs
             
-            # Create server packages configuration
-            cat > /home/ats-server/server_packages.sii << 'EOF'
-            SiiNunit
-            {
-            server_packages : _nameless.server.packages {
-            }
-            }
-            EOF
+            # Check if server_packages files exist
+            if [ ! -f /home/ats-server/server_packages.dat ]; then
+              echo "ERROR: server_packages.dat not found!"
+              exit 1
+            fi
             
-            # Create start script
-            cat > /home/ats-server/start_ats_server.sh << 'EOF'
-            #!/bin/bash
-            cd /home/ats-server
-            ./bin/linux_x64/amtrucks_server -server -dedicated
-            EOF
-            
-            chmod +x /home/ats-server/start_ats_server.sh
+            if [ ! -f /home/ats-server/server_packages.sii ]; then
+              echo "ERROR: server_packages.sii not found!"
+              exit 1
+            fi
             
             # Start the server
             cd /home/ats-server
-            nohup ./start_ats_server.sh > server.log 2>&1 &
-            echo "ATS server started!"
+            if [ -f ./start_ats_server.sh ]; then
+              nohup ./start_ats_server.sh > logs/server.log 2>&1 &
+              echo "ATS server started with custom script!"
+            else
+              # Fallback to direct command
+              export LD_LIBRARY_PATH=/home/ats-server/linux64:$LD_LIBRARY_PATH
+              nohup ./bin/linux_x64/amtrucks_server -server /home/ats-server/server_packages.sii -server_cfg /home/ats-server/server_config.sii -homedir /home/ats-server -nosingle > logs/server.log 2>&1 &
+              echo "ATS server started with direct command!"
+            fi
+            
+            echo "Server PID: $!"
+            echo "Check logs at: /home/ats-server/logs/server.log"
 

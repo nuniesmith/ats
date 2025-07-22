@@ -28,4 +28,5 @@ server_config : .config {
  show_server: true                                     // Not used for dedicated server.
  moderator_list: 2                                     // Default moderators count
 }
+
 }
