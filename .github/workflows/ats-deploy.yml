@@ -394,29 +394,29 @@ jobs:
               }
             fi
             
-# Wait a moment for files to settle
-sleep 5
-
-# Verify ATS server was installed/updated
-echo "Checking for ATS server binary..."
-if [ -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
-  echo "✅ ATS Dedicated Server is ready!"
-  ls -la /home/ats-server/bin/linux_x64/amtrucks_server
-else
-  echo "Checking alternative locations..."
-  find /home/ats-server -name "amtrucks_server" -type f 2>/dev/null || true
-  
-  # SteamCMD might need a moment to finalize
-  sleep 5
-  
-  if [ -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
-    echo "✅ ATS Dedicated Server found after delay!"
-    ls -la /home/ats-server/bin/linux_x64/amtrucks_server
-  else
-    echo "⚠️ ATS server binary not found, but installation appeared successful"
-    echo "Continuing anyway..."
-  fi
-fi
+            # Wait a moment for files to settle
+            sleep 5
+            
+            # Verify ATS server was installed/updated
+            echo "Checking for ATS server binary..."
+            if [ -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
+              echo "✅ ATS Dedicated Server is ready!"
+              ls -la /home/ats-server/bin/linux_x64/amtrucks_server
+            else
+              echo "Checking alternative locations..."
+              find /home/ats-server -name "amtrucks_server" -type f 2>/dev/null || true
+              
+              # SteamCMD might need a moment to finalize
+              sleep 5
+              
+              if [ -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
+                echo "✅ ATS Dedicated Server found after delay!"
+                ls -la /home/ats-server/bin/linux_x64/amtrucks_server
+              else
+                echo "⚠️ ATS server binary not found, but installation appeared successful"
+                echo "Continuing anyway..."
+              fi
+            fi
 
       - name: Deploy Configuration Files
         run: |
