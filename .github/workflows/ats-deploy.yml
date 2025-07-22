@@ -144,6 +144,21 @@ jobs:
             exit 1
           fi
           
+          # Install jq if not present (needed for JSON parsing)
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "📦 Installing jq..."
+            if [ -f /etc/arch-release ]; then
+              # Use system package manager on Arch (no sudo needed if already root)
+              pacman -S --noconfirm jq 2>/dev/null || echo "⚠️ Could not install jq"
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update && apt-get install -y jq 2>/dev/null || echo "⚠️ Could not install jq"
+            else
+              echo "⚠️ Cannot install jq - unknown package manager"
+            fi
+          else
+            echo "✅ jq already installed"
+          fi
+          
           # Check for Python installation
           echo "🔍 Checking for Python..."
           if command -v python3 >/dev/null 2>&1; then

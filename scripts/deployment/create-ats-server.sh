@@ -87,12 +87,30 @@ export LINODE_CLI_TOKEN="$LINODE_CLI_TOKEN"
 
 # Check for existing server
 log "Checking for existing ATS servers..."
-EXISTING_SERVER=$(linode-cli linodes list --json | jq -r ".[] | select(.label == \"$SERVER_NAME\") | .id" | head -1)
+
+# Check if jq is available
+if ! command -v jq >/dev/null 2>&1; then
+    warn "jq not found - using alternative parsing method"
+    # Try to find existing server using grep/sed
+    EXISTING_SERVER=$(linode-cli linodes list --text | grep "$SERVER_NAME" | awk '{print $1}' | head -1)
+    if [ -n "$EXISTING_SERVER" ] && [ "$FORCE_NEW" != "true" ]; then
+        log "Found existing server ID: $EXISTING_SERVER"
+        SERVER_ID="$EXISTING_SERVER"
+        # Get IP using text output
+        SERVER_IP=$(linode-cli linodes view "$SERVER_ID" --text | grep -E '^ipv4' | awk '{print $2}' | head -1)
+    fi
+else
+    # Use jq if available
+    EXISTING_SERVER=$(linode-cli linodes list --json | jq -r ".[] | select(.label == \"$SERVER_NAME\") | .id" | head -1)
+    if [ -n "$EXISTING_SERVER" ] && [ "$FORCE_NEW" != "true" ]; then
+        log "Found existing server: $EXISTING_SERVER"
+        SERVER_ID="$EXISTING_SERVER"
+        SERVER_IP=$(linode-cli linodes view "$SERVER_ID" --json | jq -r '.[0].ipv4[0]')
+    fi
+fi
 
 if [ -n "$EXISTING_SERVER" ] && [ "$FORCE_NEW" != "true" ]; then
-    log "Found existing server: $EXISTING_SERVER"
-    SERVER_ID="$EXISTING_SERVER"
-    SERVER_IP=$(linode-cli linodes view "$SERVER_ID" --json | jq -r '.[0].ipv4[0]')
+    log "Using existing server: ID=$SERVER_ID, IP=$SERVER_IP"
 else
     if [ -n "$EXISTING_SERVER" ]; then
         log "Deleting existing server..."
