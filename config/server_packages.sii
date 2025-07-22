@@ -1,6 +1,6 @@
 SiiNunit
 {
-server_packages_info : _nameless.20b.8876.75a0 {
+server_packages_info : _nameless.1f7.b099.4d90 {
  version: 1
  dlc_essential_list: 0
  dlc_non_essential_list: 14
@@ -19,33 +19,33 @@ server_packages_info : _nameless.20b.8876.75a0 {
  dlc_non_essential_list[12]: 24801833
  dlc_non_essential_list[13]: 74845097
  mod_list: 19
- mod_list[0]: _nameless.20c.1ba2.2cb0
- mod_list[1]: _nameless.20c.1ba2.3310
- mod_list[2]: _nameless.20c.1ba2.34f0
- mod_list[3]: _nameless.20c.1ba2.2710
- mod_list[4]: _nameless.20c.1ba2.33d0
- mod_list[5]: _nameless.20c.1ba2.2770
- mod_list[6]: _nameless.20c.1ba2.2d70
- mod_list[7]: _nameless.20c.1ba2.24d0
- mod_list[8]: _nameless.20c.1ba2.2e90
- mod_list[9]: _nameless.20c.1ba2.2ef0
- mod_list[10]: _nameless.20c.1ba2.3a90
- mod_list[11]: _nameless.20c.1ba2.2fb0
- mod_list[12]: _nameless.20c.1ba2.3430
- mod_list[13]: _nameless.20c.1ba2.3550
- mod_list[14]: _nameless.20c.1ba2.35b0
- mod_list[15]: _nameless.20c.1ba2.36d0
- mod_list[16]: _nameless.20c.1ba2.3af0
- mod_list[17]: _nameless.20c.1ba2.23b0
- mod_list[18]: _nameless.20c.1ba2.2410
+ mod_list[0]: _nameless.1f7.a9b0.d500
+ mod_list[1]: _nameless.1f7.a9b0.cba0
+ mod_list[2]: _nameless.1f7.a9b0.d2c0
+ mod_list[3]: _nameless.1f7.a9b0.db60
+ mod_list[4]: _nameless.1f7.a9b0.cea0
+ mod_list[5]: _nameless.1f7.a9b0.dc80
+ mod_list[6]: _nameless.1f7.a9b0.d740
+ mod_list[7]: _nameless.1f7.a9b0.d200
+ mod_list[8]: _nameless.1f7.a9b0.d800
+ mod_list[9]: _nameless.1f7.a9b0.d860
+ mod_list[10]: _nameless.1f7.a9b0.d920
+ mod_list[11]: _nameless.1f7.a9b0.dce0
+ mod_list[12]: _nameless.1f7.a9b0.d080
+ mod_list[13]: _nameless.1f7.a9b0.d260
+ mod_list[14]: _nameless.1f7.a9b0.d980
+ mod_list[15]: _nameless.1f7.a9b0.d320
+ mod_list[16]: _nameless.1f7.a9b0.d9e0
+ mod_list[17]: _nameless.1f7.a9b0.da40
+ mod_list[18]: _nameless.1f7.a9b0.de00
  map_name: "/map/usa.mbd"
  map_dimensions: (-31744000, -19456000, 8192000, 19456000)
  roads_data_file_name: "/home/server_packages.dat"
- time_stamp: 1753144989
+ time_stamp: 1753148992
  time_compression: 16.345001
 }
 
-server_mod_detail : _nameless.20c.1ba2.2cb0 {
+server_mod_detail : _nameless.1f7.a9b0.d500 {
  package_name: "mod_workshop_package.000000002F436F83"
  mod_name: "SCS Long Chassis + 625HP"
  checksum: 14089853508840269861
@@ -55,7 +55,7 @@ server_mod_detail : _nameless.20c.1ba2.2cb0 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.3310 {
+server_mod_detail : _nameless.1f7.a9b0.cba0 {
  package_name: "mod_workshop_package.0000000026E9432E"
  mod_name: "Realistic Mirror FOV"
  checksum: 6629518746020361062
@@ -65,7 +65,7 @@ server_mod_detail : _nameless.20c.1ba2.3310 {
  full_name: true
 }
 
-server_mod_detail : _nameless.20c.1ba2.34f0 {
+server_mod_detail : _nameless.1f7.a9b0.d2c0 {
  package_name: "mod_workshop_package.000000009C227DC6"
  mod_name: "Reverse Lights - farther"
  checksum: 7770791010533417048
@@ -75,7 +75,7 @@ server_mod_detail : _nameless.20c.1ba2.34f0 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.2710 {
+server_mod_detail : _nameless.1f7.a9b0.db60 {
  package_name: "mod_workshop_package.000000009524955E"
  mod_name: "Heatshields For SCS 389 "
  checksum: 7655048525304905669
@@ -85,7 +85,7 @@ server_mod_detail : _nameless.20c.1ba2.2710 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.33d0 {
+server_mod_detail : _nameless.1f7.a9b0.cea0 {
  package_name: "mod_workshop_package.00000000A5B9F607"
  mod_name: "Real World Signs & Logos"
  checksum: 6988207513257562554
@@ -95,7 +95,7 @@ server_mod_detail : _nameless.20c.1ba2.33d0 {
  full_name: true
 }
 
-server_mod_detail : _nameless.20c.1ba2.2770 {
+server_mod_detail : _nameless.1f7.a9b0.dc80 {
  package_name: "mod_workshop_package.00000000B8F4DFFC"
  mod_name: "Realistic Brutal Graphic"
  checksum: 12207953421709936069
@@ -105,7 +105,7 @@ server_mod_detail : _nameless.20c.1ba2.2770 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.2d70 {
+server_mod_detail : _nameless.1f7.a9b0.d740 {
  package_name: "mod_workshop_package.000000002E5EF2C3"
  mod_name: "Realistic Vehicle Lights"
  checksum: 2994429884826677498
@@ -115,7 +115,7 @@ server_mod_detail : _nameless.20c.1ba2.2d70 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.24d0 {
+server_mod_detail : _nameless.1f7.a9b0.d200 {
  package_name: "mod_workshop_package.00000000865C8FDE"
  mod_name: "Realistic Truck Physics "
  checksum: 2994429884826677498
@@ -125,7 +125,7 @@ server_mod_detail : _nameless.20c.1ba2.24d0 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.2e90 {
+server_mod_detail : _nameless.1f7.a9b0.d800 {
  package_name: "mod_workshop_package.0000000026E02B47"
  mod_name: "SiSL's Mega Pack"
  checksum: 15754159148385529700
@@ -135,7 +135,7 @@ server_mod_detail : _nameless.20c.1ba2.2e90 {
  full_name: true
 }
 
-server_mod_detail : _nameless.20c.1ba2.2ef0 {
+server_mod_detail : _nameless.1f7.a9b0.d860 {
  package_name: "mod_workshop_package.0000000027A836F0"
  mod_name: "Real Eaton Fuller Transm"
  checksum: 2994429884826677498
@@ -145,7 +145,7 @@ server_mod_detail : _nameless.20c.1ba2.2ef0 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.3a90 {
+server_mod_detail : _nameless.1f7.a9b0.d920 {
  package_name: "mod_workshop_package.000000008B6B11A0"
  mod_name: "Cummins N14 Sound & Engi"
  checksum: 2293377039591645999
@@ -155,7 +155,7 @@ server_mod_detail : _nameless.20c.1ba2.3a90 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.2fb0 {
+server_mod_detail : _nameless.1f7.a9b0.dce0 {
  package_name: "mod_workshop_package.000000009CF6E110"
  mod_name: "JC Amateur Sound Effects"
  checksum: 506936351348770728
@@ -165,7 +165,7 @@ server_mod_detail : _nameless.20c.1ba2.2fb0 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.3430 {
+server_mod_detail : _nameless.1f7.a9b0.d080 {
  package_name: "mod_workshop_package.00000000D1364714"
  mod_name: Maxwell
  checksum: 8246417657465155767
@@ -175,7 +175,7 @@ server_mod_detail : _nameless.20c.1ba2.3430 {
  full_name: true
 }
 
-server_mod_detail : _nameless.20c.1ba2.3550 {
+server_mod_detail : _nameless.1f7.a9b0.d260 {
  package_name: "mod_workshop_package.000000008A17812D"
  mod_name: "Real companies, gas stat"
  checksum: 3844342574820209165
@@ -185,7 +185,7 @@ server_mod_detail : _nameless.20c.1ba2.3550 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.35b0 {
+server_mod_detail : _nameless.1f7.a9b0.d980 {
  package_name: "mod_workshop_package.00000000C28FF35F"
  mod_name: "Cummins ISX Straight pip"
  checksum: 3749935468922041035
@@ -195,7 +195,7 @@ server_mod_detail : _nameless.20c.1ba2.35b0 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.36d0 {
+server_mod_detail : _nameless.1f7.a9b0.d320 {
  package_name: "mod_workshop_package.00000000CC98B030"
  mod_name: "Box Trailer Enhanced"
  checksum: 16736394767546302492
@@ -205,7 +205,7 @@ server_mod_detail : _nameless.20c.1ba2.36d0 {
  full_name: true
 }
 
-server_mod_detail : _nameless.20c.1ba2.3af0 {
+server_mod_detail : _nameless.1f7.a9b0.d9e0 {
  package_name: "mod_workshop_package.00000000D1A26348"
  mod_name: "CAT 3406E 2WS Straight p"
  checksum: 17682663760937426239
@@ -215,7 +215,7 @@ server_mod_detail : _nameless.20c.1ba2.3af0 {
  full_name: false
 }
 
-server_mod_detail : _nameless.20c.1ba2.23b0 {
+server_mod_detail : _nameless.1f7.a9b0.da40 {
  package_name: "mod_workshop_package.000000008BB1F7F2"
  mod_name: "Air Brake Sound Mod"
  checksum: 4059271849209013052
@@ -225,7 +225,7 @@ server_mod_detail : _nameless.20c.1ba2.23b0 {
  full_name: true
 }
 
-server_mod_detail : _nameless.20c.1ba2.2410 {
+server_mod_detail : _nameless.1f7.a9b0.de00 {
  package_name: "mod_workshop_package.000000003182EB0E"
  mod_name: "Sound Fixes Pack v25.31 "
  checksum: 2994429884826677498
