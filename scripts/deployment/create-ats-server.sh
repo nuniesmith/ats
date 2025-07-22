@@ -169,6 +169,13 @@ EOF
 log "Server ready!"
 log "  ID: $SERVER_ID"
 log "  IP: $SERVER_IP"
+
+# Debug output
+log "Debug: Writing server-details.env with:"
+log "  SERVER_IP=$SERVER_IP"
+log "  SERVER_ID=$SERVER_ID"
+log "  IS_NEW_SERVER=$([[ -n "$EXISTING_SERVER" ]] && echo "false" || echo "true")"
+
 log ""
 log "Next steps:"
 log "1. SSH to server: ssh root@$SERVER_IP"
