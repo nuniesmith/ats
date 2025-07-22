@@ -49,6 +49,15 @@ fi
 
 log "Found all required configuration files"
 
+# Check if sshpass is needed and available
+if [ -n "$SSHPASS" ]; then
+    if ! command -v sshpass >/dev/null 2>&1; then
+        error "sshpass is required but not installed"
+        echo "Please install sshpass or use SSH key authentication"
+        exit 1
+    fi
+fi
+
 # Copy files to server
 log "Copying server packages to remote server..."
 if [ -n "$SSHPASS" ]; then
