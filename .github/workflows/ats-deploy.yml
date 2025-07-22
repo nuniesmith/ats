@@ -345,7 +345,7 @@ jobs:
               dpkg --add-architecture i386
               apt-get update
               # Install required packages
-              apt-get install -y wget curl lib32gcc-s1 lib32stdc++6 libc6-i386 lib32z1
+              apt-get install -y wget curl lib32gcc-s1 lib32stdc++6 libc6-i386 lib32z1 screen
             else
               echo "Unsupported OS"
               exit 1
@@ -448,6 +448,7 @@ jobs:
           host: ${{ needs.setup-server.outputs.server_ip }}
           username: root
           password: ${{ secrets.ATS_ROOT_PASSWORD }}
+          command_timeout: 30m
           script: |
             # Configure firewall (if ufw is installed)
             if command -v ufw >/dev/null 2>&1; then
@@ -506,38 +507,67 @@ jobs:
             # Set up environment
             export LD_LIBRARY_PATH=/home/ats-server/linux64:/home/ats-server:$LD_LIBRARY_PATH
             
-            # Start server using the startup script if available
-            if [ -f ./start_ats_server.sh ]; then
-              echo "Starting ATS server with custom script..."
-              chmod +x ./start_ats_server.sh
-              nohup ./start_ats_server.sh > /tmp/ats_startup.log 2>&1 &
-              SERVER_PID=$!
-            else
-              # Direct command fallback
-              echo "Starting ATS server with direct command..."
-              nohup ./bin/linux_x64/amtrucks_server \
-                -server /home/ats-server/server_packages.sii \
-                -server_cfg /home/ats-server/server_config.sii \
-                -homedir /home/ats-server \
-                -nosingle > logs/server.log 2>&1 &
-              SERVER_PID=$!
-            fi
-            
-            echo "Server started with PID: $SERVER_PID"
-            
-            # Wait a bit and check if server is still running
-            sleep 10
-            
-            if ps -p $SERVER_PID > /dev/null; then
-              echo "✅ Server is running!"
-              echo "Server process details:"
-              ps -fp $SERVER_PID
-            else
-              echo "❌ Server process died!"
-              echo "Last 50 lines of server log:"
-              tail -50 /home/ats-server/logs/server.log
-              exit 1
-            fi
+# Check if server binary exists
+if [ ! -f /home/ats-server/bin/linux_x64/amtrucks_server ]; then
+  echo "❌ ERROR: ATS server binary not found!"
+  echo "Contents of /home/ats-server/bin/:"
+  ls -la /home/ats-server/bin/ || echo "bin directory not found"
+  exit 1
+fi
+
+# Start server using the startup script if available
+if [ -f ./start_ats_server.sh ]; then
+  echo "Starting ATS server with custom script..."
+  chmod +x ./start_ats_server.sh
+  # Use screen to keep the server running
+  screen -dmS ats-server ./start_ats_server.sh
+  sleep 5
+  
+  # Check if screen session exists
+  if screen -list | grep -q "ats-server"; then
+    echo "✅ Server started in screen session 'ats-server'"
+  else
+    echo "⚠️ Screen session not found, trying direct start..."
+    # Fallback to direct command
+    screen -dmS ats-server ./bin/linux_x64/amtrucks_server \
+      -server /home/ats-server/server_packages.sii \
+      -server_cfg /home/ats-server/server_config.sii \
+      -homedir /home/ats-server \
+      -nosingle
+  fi
+else
+  # Direct command fallback
+  echo "Starting ATS server with direct command..."
+  screen -dmS ats-server ./bin/linux_x64/amtrucks_server \
+    -server /home/ats-server/server_packages.sii \
+    -server_cfg /home/ats-server/server_config.sii \
+    -homedir /home/ats-server \
+    -nosingle
+fi
+
+# Wait for server to initialize
+echo "Waiting for server to initialize..."
+sleep 15
+
+# Check if server is running
+if screen -list | grep -q "ats-server"; then
+  echo "✅ Server is running in screen session!"
+  echo "Screen sessions:"
+  screen -list
+  
+  # Check if process exists
+  if pgrep -f amtrucks_server > /dev/null; then
+    echo "✅ ATS server process confirmed running"
+    echo "Process details:"
+    ps aux | grep amtrucks_server | grep -v grep
+  else
+    echo "⚠️ Server process not found, checking logs..."
+  fi
+else
+  echo "❌ Server screen session not found!"
+  echo "Checking server log for errors:"
+  tail -50 /home/ats-server/logs/server.log 2>/dev/null || echo "Log file not found"
+fi
             
             echo ""
             echo "📋 Server Information:"
