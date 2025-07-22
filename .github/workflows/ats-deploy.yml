@@ -476,20 +476,38 @@ jobs:
             fi
             
             # Then kill any remaining server processes
-            # Use a more specific pattern to avoid killing the SSH session
-            ATS_PIDS=$(pgrep -f "bin/linux_x64/amtrucks_server" || true)
+            # First, let's see what processes are running
+            echo "Current processes with 'amtrucks' in the name:"
+            ps aux | grep amtrucks | grep -v grep || true
+            
+            # Use a very specific pattern to find only the game server
+            ATS_PIDS=$(pgrep -f "/home/ats-server/bin/linux_x64/amtrucks_server" || true)
             if [ -n "$ATS_PIDS" ]; then
               echo "Found running ATS server process(es): $ATS_PIDS"
+              echo "Details of processes to be terminated:"
+              for pid in $ATS_PIDS; do
+                ps -p $pid -o pid,ppid,cmd --no-headers || true
+              done
+              
               echo "Terminating ATS server processes..."
               for pid in $ATS_PIDS; do
-                kill $pid 2>/dev/null || true
+                # Double check this is really the game server before killing
+                if ps -p $pid -o cmd --no-headers 2>/dev/null | grep -q "/home/ats-server/bin/linux_x64/amtrucks_server"; then
+                  echo "Killing PID $pid"
+                  kill $pid 2>/dev/null || true
+                else
+                  echo "Skipping PID $pid - not the game server"
+                fi
               done
               sleep 2
+              
               # Check if they're still running and force kill if needed
               for pid in $ATS_PIDS; do
                 if kill -0 $pid 2>/dev/null; then
-                  echo "Process $pid still running, force killing..."
-                  kill -9 $pid 2>/dev/null || true
+                  if ps -p $pid -o cmd --no-headers 2>/dev/null | grep -q "/home/ats-server/bin/linux_x64/amtrucks_server"; then
+                    echo "Process $pid still running, force killing..."
+                    kill -9 $pid 2>/dev/null || true
+                  fi
                 fi
               done
             else
