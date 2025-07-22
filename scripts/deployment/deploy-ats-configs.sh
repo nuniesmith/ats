@@ -51,20 +51,40 @@ log "Found all required configuration files"
 
 # Copy files to server
 log "Copying server packages to remote server..."
-scp -o StrictHostKeyChecking=no \
-    config/server_packages.dat \
-    config/server_packages.sii \
-    config/server_config.sii \
-    root@$SERVER_IP:/home/ats-server/
+if [ -n "$SSHPASS" ]; then
+    # Use sshpass if password is provided
+    sshpass -p "$SSHPASS" scp -o StrictHostKeyChecking=no \
+        config/server_packages.dat \
+        config/server_packages.sii \
+        config/server_config.sii \
+        root@$SERVER_IP:/home/ats-server/
+else
+    # Use SSH key authentication
+    scp -o StrictHostKeyChecking=no \
+        config/server_packages.dat \
+        config/server_packages.sii \
+        config/server_config.sii \
+        root@$SERVER_IP:/home/ats-server/
+fi
 
 # Copy startup scripts
 log "Copying startup scripts..."
-scp -o StrictHostKeyChecking=no \
-    scripts/start_ats_server.sh \
-    root@$SERVER_IP:/home/ats-server/
+if [ -n "$SSHPASS" ]; then
+    sshpass -p "$SSHPASS" scp -o StrictHostKeyChecking=no \
+        scripts/start_ats_server.sh \
+        root@$SERVER_IP:/home/ats-server/
+else
+    scp -o StrictHostKeyChecking=no \
+        scripts/start_ats_server.sh \
+        root@$SERVER_IP:/home/ats-server/
+fi
 
 # Make scripts executable on remote
-ssh -o StrictHostKeyChecking=no root@$SERVER_IP "chmod +x /home/ats-server/*.sh"
+if [ -n "$SSHPASS" ]; then
+    sshpass -p "$SSHPASS" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "chmod +x /home/ats-server/*.sh"
+else
+    ssh -o StrictHostKeyChecking=no root@$SERVER_IP "chmod +x /home/ats-server/*.sh"
+fi
 
 log "✅ Configuration files deployed successfully!"
 log ""
