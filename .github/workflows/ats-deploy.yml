@@ -82,8 +82,16 @@ jobs:
           # Install Linode CLI
           pip3 install linode-cli
           
-          # Configure Linode CLI
-          linode-cli configure --token "$LINODE_TOKEN"
+          # Configure Linode CLI non-interactively
+          mkdir -p ~/.config/linode-cli
+          cat > ~/.config/linode-cli/config << EOF
+          [DEFAULT]
+          token = $LINODE_TOKEN
+          region = us-east
+          type = g6-nanode-1
+          image = linode/ubuntu22.04
+          authorized_users = 
+          EOF
           
           # Check for existing servers
           SERVER_INFO=$(linode-cli linodes list --text --no-headers --format="label,ipv4,status" | grep "ats-server" || true)
@@ -149,7 +157,17 @@ jobs:
           
           # Install Linode CLI
           pip3 install linode-cli
-          linode-cli configure --token "$LINODE_TOKEN"
+          
+          # Configure Linode CLI non-interactively
+          mkdir -p ~/.config/linode-cli
+          cat > ~/.config/linode-cli/config << EOF
+          [DEFAULT]
+          token = $LINODE_TOKEN
+          region = us-east
+          type = g6-nanode-1
+          image = linode/ubuntu22.04
+          authorized_users = 
+          EOF
           
           # Create the server
           RESULT=$(linode-cli linodes create \
