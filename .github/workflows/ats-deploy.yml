@@ -357,6 +357,17 @@ jobs:
           
           # Start Docker
           systemctl start docker
+          systemctl enable docker
+          
+          # Wait for Docker to be ready
+          for i in {1..20}; do
+            if docker info >/dev/null 2>&1; then
+              echo "✅ Docker daemon is ready"
+              break
+            fi
+            echo "⏳ Waiting for Docker daemon... (attempt $i/20)"
+            sleep 3
+          done
           
           # Verify docker-compose is available
           if ! command -v docker-compose >/dev/null 2>&1; then
@@ -624,15 +635,41 @@ jobs:
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
             cd /opt/ats
             
+            # Ensure Docker daemon is running
+            echo 'Starting Docker daemon...'
+            systemctl start docker
+            systemctl enable docker
+            
+            # Wait for Docker daemon to be ready
+            for i in {1..30}; do
+              if docker info >/dev/null 2>&1; then
+                echo 'Docker daemon is ready'
+                break
+              fi
+              echo \"Waiting for Docker daemon... (attempt \$i/30)\"
+              sleep 3
+            done
+            
             # Check if docker-compose is available, install if not
             if ! command -v docker-compose >/dev/null 2>&1; then
               echo 'Installing docker-compose...'
-              pacman -S --noconfirm docker-compose
+              pacman -S --noconfirm docker-compose || pip install docker-compose
             fi
             
+            # Verify Docker is working
+            docker version
+            docker-compose version
+            
             # Pull and start containers
+            echo 'Pulling Docker images...'
             docker-compose pull
+            
+            echo 'Starting containers...'
             docker-compose up -d
+            
+            # Show container status
+            docker-compose ps
+            docker-compose logs --tail=20
             
             # Wait for health checks
             echo 'Waiting for services to be healthy...'
