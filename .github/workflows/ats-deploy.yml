@@ -569,11 +569,14 @@ jobs:
           echo "   Web: ${WEB_IMAGE:-nuniesmith/ats:web-latest}"
           echo "   API: ${API_IMAGE:-nuniesmith/ats:api-latest}"
           
-          # Create deployment directory
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "mkdir -p /opt/ats"
+          # Create deployment directory and subdirectories
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "mkdir -p /opt/ats/config"
           
           # Copy deployment files
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no docker-compose.prod.yml root@$SERVER_IP:/opt/ats/docker-compose.yml
+          
+          # Copy nginx configuration
+          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx.conf root@$SERVER_IP:/opt/ats/config/nginx.conf
           
           # Create environment file
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "cat > /opt/ats/.env << 'EOF'
