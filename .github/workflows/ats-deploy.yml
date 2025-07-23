@@ -321,6 +321,13 @@ jobs:
             # Install essential packages
             pacman -S --noconfirm curl wget git unzip nginx docker docker-compose tailscale netdata
             
+            # Verify docker-compose installation
+            if ! command -v docker-compose >/dev/null 2>&1; then
+              echo "Installing docker-compose via pip as fallback..."
+              pacman -S --noconfirm python-pip
+              pip install docker-compose
+            fi
+            
             # Enable essential services
             systemctl enable docker
             systemctl enable tailscaled
@@ -350,6 +357,13 @@ jobs:
           
           # Start Docker
           systemctl start docker
+          
+          # Verify docker-compose is available
+          if ! command -v docker-compose >/dev/null 2>&1; then
+            echo "Installing docker-compose..."
+            pacman -S --noconfirm docker-compose || pip install docker-compose
+          fi
+          echo "✅ Docker and docker-compose ready"
           
           # Start and configure Netdata
           systemctl start netdata
@@ -609,6 +623,14 @@ jobs:
           # Deploy the stack
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
             cd /opt/ats
+            
+            # Check if docker-compose is available, install if not
+            if ! command -v docker-compose >/dev/null 2>&1; then
+              echo 'Installing docker-compose...'
+              pacman -S --noconfirm docker-compose
+            fi
+            
+            # Pull and start containers
             docker-compose pull
             docker-compose up -d
             
@@ -619,7 +641,7 @@ jobs:
                 echo 'Web app is healthy'
                 break
               fi
-              echo 'Waiting for web app... (attempt \$i/30)'
+              echo \"Waiting for web app... (attempt \$i/30)\"
               sleep 10
             done
             
@@ -628,7 +650,7 @@ jobs:
                 echo 'API server is healthy'
                 break
               fi
-              echo 'Waiting for API server... (attempt \$i/30)'
+              echo \"Waiting for API server... (attempt \$i/30)\"
               sleep 10
             done
           "
