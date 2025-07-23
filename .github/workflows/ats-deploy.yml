@@ -23,7 +23,7 @@ on:
         description: 'Create new Linode server for ATS'
         required: false
         type: boolean
-        default: false
+        default: true
       
       server_type:
         description: 'Server type to create'
@@ -202,15 +202,20 @@ jobs:
           
           SERVER_EXISTS="${{ steps.check-server.outputs.exists }}"
           CREATE_NEW="${{ env.CREATE_NEW_SERVER }}"
+          DEPLOYMENT_MODE="${{ env.DEPLOYMENT_MODE }}"
           
           echo "Server exists: $SERVER_EXISTS"
           echo "Create new requested: $CREATE_NEW"
+          echo "Deployment mode: $DEPLOYMENT_MODE"
           
           if [[ "$SERVER_EXISTS" == "true" ]]; then
             echo "✅ Server exists - will use existing server"
             echo "create=false" >> $GITHUB_OUTPUT
           elif [[ "$CREATE_NEW" == "true" ]]; then
             echo "🔨 Will create new server"
+            echo "create=true" >> $GITHUB_OUTPUT
+          elif [[ "$DEPLOYMENT_MODE" == "docker-only" || "$DEPLOYMENT_MODE" == "full-deploy" || "$DEPLOYMENT_MODE" == "web-only" ]]; then
+            echo "🔨 Deployment requested but no server exists - will create one"
             echo "create=true" >> $GITHUB_OUTPUT
           else
             echo "ℹ️ No server exists and create_new_server=false"
@@ -412,9 +417,12 @@ jobs:
           if [[ "${{ needs.infrastructure-check.outputs.server-exists }}" == "true" ]]; then
             SERVER_IP="${{ needs.infrastructure-check.outputs.server-ip }}"
             echo "Using existing server: $SERVER_IP"
-          else
+          elif [[ "${{ needs.create-server.result }}" == "success" ]]; then
             SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
             echo "Using new server: $SERVER_IP"
+          else
+            echo "❌ No server available for deployment"
+            exit 1
           fi
           echo "server-ip=$SERVER_IP" >> $GITHUB_OUTPUT
 
@@ -511,24 +519,37 @@ jobs:
           echo "## 📊 Deployment Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
+          # Server status
           if [[ "${{ needs.create-server.result }}" == "success" ]]; then
             echo "✅ **New Server Created**: ${{ needs.create-server.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ needs.infrastructure-check.outputs.server-exists }}" == "true" ]]; then
             echo "✅ **Using Existing Server**: ${{ needs.infrastructure-check.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.create-server.result }}" == "skipped" ]]; then
+            echo "⚠️ **Server Creation Skipped**: No server exists and create_new_server=false" >> $GITHUB_STEP_SUMMARY
+            echo "   - To deploy, set create_new_server=true in workflow inputs" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.infrastructure-check.result }}" == "failure" ]]; then
+            echo "❌ **Infrastructure Check Failed**: Could not check for existing servers" >> $GITHUB_STEP_SUMMARY
           fi
           
+          # Build status
           if [[ "${{ needs.build-docker-images.result }}" == "success" ]]; then
             echo "✅ **Docker Images Built and Pushed**" >> $GITHUB_STEP_SUMMARY
             echo "   - Web: ${{ needs.build-docker-images.outputs.web-image }}" >> $GITHUB_STEP_SUMMARY
             echo "   - API: ${{ needs.build-docker-images.outputs.api-image }}" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.build-docker-images.result }}" == "skipped" ]]; then
+            echo "⚠️ **Docker Build Skipped**: No code changes detected" >> $GITHUB_STEP_SUMMARY
           fi
           
+          # Deployment status
           if [[ "${{ needs.deploy-to-server.result }}" == "success" ]]; then
             echo "✅ **Deployment Successful**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "## 🌐 Access Points" >> $GITHUB_STEP_SUMMARY
             echo "- **Web Interface**: http://${{ env.DOMAIN_NAME }}" >> $GITHUB_STEP_SUMMARY
             echo "- **API Server**: http://${{ env.DOMAIN_NAME }}:3001" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.deploy-to-server.result }}" == "skipped" ]]; then
+            echo "⚠️ **Deployment Skipped**: No server available" >> $GITHUB_STEP_SUMMARY
+            echo "   - Create a server first by setting create_new_server=true" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: 📢 Discord Notification
