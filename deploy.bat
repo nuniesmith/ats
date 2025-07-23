@@ -1,247 +1,170 @@
 @echo off
-title ATS Server Docker Deployment
-
-REM ATS Server Docker Deployment Script (Windows)
-REM ==============================================
+REM ATS Server Master Deployment Script (Windows)
+REM ===============================================
 
 setlocal EnableDelayedExpansion
 
-REM Configuration
-set COMPOSE_FILE=docker-compose.yml
-set ENV_FILE=.env
+REM Get script directory
+set "SCRIPT_DIR=%~dp0"
+set "DOCKER_SCRIPTS_DIR=%SCRIPT_DIR%scripts\docker"
 
-REM Check command line argument
-if "%1"=="" goto usage
-if "%1"=="start" goto start
-if "%1"=="stop" goto stop
-if "%1"=="restart" goto restart
-if "%1"=="logs" goto logs
-if "%1"=="build" goto build
-if "%1"=="cleanup" goto cleanup
-if "%1"=="status" goto status
-goto usage
+echo ===============================================
+echo    ATS Server Management - Master Deployer
+echo ===============================================
+echo.
 
-:check_docker
-echo Checking Docker installation...
-docker --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ❌ Docker is not installed. Please install Docker Desktop first.
-    pause
-    exit /b 1
+REM Check for command line argument
+if "%1"=="" goto show_menu
+
+REM Direct command execution
+set "command=%1"
+set "arg1=%2"
+set "arg2=%3"
+
+if /i "%command%"=="local" (
+    echo Launching Local Docker Deployment...
+    call "%DOCKER_SCRIPTS_DIR%\deploy-local.bat" %arg1% %arg2%
+    goto end
 )
 
-docker-compose --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ❌ Docker Compose is not installed. Please install Docker Compose first.
-    pause
-    exit /b 1
+if /i "%command%"=="dockerhub" (
+    echo Launching DockerHub Deployment...
+    call "%DOCKER_SCRIPTS_DIR%\deploy-dockerhub.bat" %arg1% %arg2%
+    goto end
 )
 
-echo ✅ Docker and Docker Compose are installed
-goto :eof
+if /i "%command%"=="server" (
+    echo Launching ATS Server Manager...
+    call "%SCRIPT_DIR%scripts\ats_server_manager.bat"
+    goto end
+)
 
-:create_env_file
-if not exist "%ENV_FILE%" (
-    echo Creating environment file...
-    (
-        echo # ATS Server Environment Configuration
-        echo # ===================================
-        echo.
-        echo # Security
-        echo JWT_SECRET=your-jwt-secret-change-this-in-production
-        echo.
-        echo # Domain Configuration
-        echo DOMAIN_NAME=ats.7gram.xyz
-        echo.
-        echo # ATS Configuration
-        echo ATS_DEFAULT_PASSWORD=ruby
-        echo STEAM_COLLECTION_ID=3530633316
-        echo.
-        echo # API URLs ^(automatically configured for Docker^)
-        echo VITE_API_URL=http://localhost/api
-        echo VITE_SOCKET_URL=http://localhost
-        echo.
-        echo # Optional: External Services
-        echo CLOUDFLARE_API_TOKEN=
-        echo CLOUDFLARE_ZONE_ID=
-        echo DISCORD_WEBHOOK_URL=
-    ) > "%ENV_FILE%"
-    echo ⚠️  Created %ENV_FILE% - please edit it with your configuration
-    echo ℹ️  You can start with default values for local development
+goto show_help
+
+:show_menu
+echo Select deployment method:
+echo.
+echo 1. Local Development (Build images locally)
+echo 2. Production (Pull from DockerHub)
+echo 3. ATS Server Manager (Game server management)
+echo 4. Help & Documentation
+echo 5. Exit
+echo.
+set /p choice="Enter your choice (1-5): "
+
+if "%choice%"=="1" goto local_deployment
+if "%choice%"=="2" goto dockerhub_deployment
+if "%choice%"=="3" goto server_manager
+if "%choice%"=="4" goto show_help
+if "%choice%"=="5" goto end
+goto show_menu
+
+:local_deployment
+echo.
+echo ================================================
+echo           Local Development Deployment
+echo ================================================
+echo.
+echo This will build Docker images locally and start services.
+echo Perfect for development and testing.
+echo.
+call "%DOCKER_SCRIPTS_DIR%\deploy-local.bat" start
+goto end
+
+:dockerhub_deployment
+echo.
+echo ================================================
+echo            Production Deployment
+echo ================================================
+echo.
+echo Choose deployment mode:
+echo 1. Standard (Use local images if DockerHub fails)
+echo 2. Production (Force DockerHub images)
+echo 3. Specific Version
+echo 4. Back to main menu
+echo.
+set /p prod_choice="Enter your choice (1-4): "
+
+if "%prod_choice%"=="1" (
+    call "%DOCKER_SCRIPTS_DIR%\deploy-dockerhub.bat" start
+) else if "%prod_choice%"=="2" (
+    call "%DOCKER_SCRIPTS_DIR%\deploy-dockerhub.bat" start prod
+) else if "%prod_choice%"=="3" (
+    set /p version="Enter version tag (e.g., v1.2.3): "
+    call "%DOCKER_SCRIPTS_DIR%\deploy-dockerhub.bat" start prod !version!
+) else if "%prod_choice%"=="4" (
+    goto show_menu
 ) else (
-    echo ℹ️  Using existing %ENV_FILE%
-)
-goto :eof
-
-:build_images
-echo Building Docker images...
-
-echo Building React web application...
-cd web
-docker build -t ats-web:latest .
-if %errorlevel% neq 0 (
-    echo ❌ Failed to build web application image
-    cd ..
-    pause
-    exit /b 1
-)
-cd ..
-
-echo Building Node.js API server...
-cd api
-docker build -t ats-api:latest .
-if %errorlevel% neq 0 (
-    echo ❌ Failed to build API server image
-    cd ..
-    pause
-    exit /b 1
-)
-cd ..
-
-echo ✅ Docker images built successfully
-goto :eof
-
-:start_services
-echo Starting ATS services...
-
-REM Stop any existing containers
-docker-compose down 2>nul
-
-REM Start new containers
-docker-compose up -d
-if %errorlevel% neq 0 (
-    echo ❌ Failed to start services
-    pause
-    exit /b 1
-)
-
-echo ✅ Services started successfully
-goto :eof
-
-:check_health
-echo Checking service health...
-
-REM Wait for services to start
-timeout /t 10 /nobreak >nul
-
-REM Check if containers are running
-docker-compose ps | findstr "Up" >nul
-if %errorlevel% neq 0 (
-    echo ❌ Some containers failed to start
-    docker-compose logs
-    pause
-    exit /b 1
-)
-
-echo ✅ Containers are running
-
-REM Check web app health (simple approach for Windows)
-echo Checking web application health...
-for /l %%i in (1,1,30) do (
-    curl -f http://localhost/health >nul 2>&1
-    if !errorlevel! equ 0 (
-        echo ✅ Web application is healthy
-        goto check_api
-    )
-    echo Waiting for web application... ^(attempt %%i/30^)
+    echo Invalid choice. Returning to main menu...
     timeout /t 2 /nobreak >nul
+    goto show_menu
 )
+goto end
 
-:check_api
-echo Checking API server health...
-for /l %%i in (1,1,30) do (
-    curl -f http://localhost:3001/health >nul 2>&1
-    if !errorlevel! equ 0 (
-        echo ✅ API server is healthy
-        goto health_done
-    )
-    echo Waiting for API server... ^(attempt %%i/30^)
-    timeout /t 2 /nobreak >nul
-)
-
-:health_done
-goto :eof
-
-:show_info
+:server_manager
 echo.
-echo ✅ 🚀 ATS Server Management System is running!
+echo ================================================
+echo            ATS Server Manager
+echo ================================================
 echo.
-echo 📍 Access Points:
-echo    🌐 Web Interface: http://localhost
-echo    🔧 API Server: http://localhost:3001
-echo    📊 Health Check: http://localhost/health
+echo Launching comprehensive ATS server management...
+call "%SCRIPT_DIR%scripts\ats_server_manager.bat"
+goto end
+
+:show_help
 echo.
-echo 🔧 Management Commands:
-echo    📋 View logs: deploy.bat logs
-echo    📊 View status: deploy.bat status
-echo    🛑 Stop services: deploy.bat stop
-echo    🔄 Restart services: deploy.bat restart
+echo ================================================
+echo         ATS Server Management Help
+echo ================================================
 echo.
-echo 🔐 Default Login:
-echo    👤 Username: admin
-echo    🔑 Password: admin123
+echo COMMAND LINE USAGE:
+echo   %~nx0 local [command]          - Local development deployment
+echo   %~nx0 dockerhub [command]      - DockerHub production deployment  
+echo   %~nx0 server                   - ATS server management
 echo.
-goto :eof
-
-:start
-call :check_docker
-call :create_env_file
-call :build_images
-call :start_services
-call :check_health
-call :show_info
-pause
-goto :eof
-
-:stop
-echo Stopping ATS services...
-docker-compose down
-echo ✅ Services stopped
-goto :eof
-
-:restart
-echo Restarting ATS services...
-docker-compose down
-docker-compose up -d
-call :check_health
-call :show_info
-goto :eof
-
-:logs
-echo Showing container logs...
-docker-compose logs --tail=50 -f
-goto :eof
-
-:build
-call :check_docker
-call :build_images
-goto :eof
-
-:cleanup
-echo Cleaning up Docker resources...
-docker-compose down --volumes --remove-orphans
-docker rmi ats-web:latest ats-api:latest 2>nul
-echo ✅ Cleanup completed
-goto :eof
-
-:status
-docker-compose ps
-goto :eof
-
-:usage
-echo ATS Server Docker Deployment Script
-echo ==================================
+echo AVAILABLE COMMANDS:
+echo   start, stop, restart, logs, status, build, cleanup
 echo.
-echo Usage: %0 {start^|stop^|restart^|logs^|build^|cleanup^|status}
+echo EXAMPLES:
+echo   %~nx0 local start              - Start local development
+echo   %~nx0 dockerhub start prod     - Start production from DockerHub
+echo   %~nx0 local logs ats-web       - Show web app logs
+echo   %~nx0 dockerhub status         - Check service status
 echo.
-echo Commands:
-echo   start    - Build and start all services
-echo   stop     - Stop all services
-echo   restart  - Restart all services
-echo   logs     - Show container logs
-echo   build    - Build Docker images only
-echo   cleanup  - Stop services and remove containers/images
-echo   status   - Show container status
+echo DEPLOYMENT METHODS:
+echo.
+echo 1. LOCAL DEVELOPMENT:
+echo    - Builds Docker images from source code
+echo    - Uses docker-compose.yml
+echo    - Perfect for development and testing
+echo    - Faster iteration on code changes
+echo.
+echo 2. PRODUCTION (DOCKERHUB):
+echo    - Pulls pre-built images from DockerHub
+echo    - Uses docker-compose.prod.yml for production
+echo    - Faster deployment, smaller bandwidth usage
+echo    - Supports version tags for rollbacks
+echo.
+echo 3. ATS SERVER MANAGER:
+echo    - Comprehensive game server management
+echo    - Mod collection utilities
+echo    - Server configuration and monitoring
+echo    - Automated server operations
+echo.
+echo REQUIREMENTS:
+echo   - Docker Desktop installed and running
+echo   - Docker Compose available
+echo   - Internet connection (for DockerHub deployment)
+echo.
+echo DOCUMENTATION:
+echo   - Check docs\ folder for detailed guides
+echo   - README.md for quick start
+echo   - DOCKER_README.md for Docker-specific info
 echo.
 pause
-goto :eof
+goto show_menu
+
+:end
+echo.
+echo Script completed. Press any key to exit...
+pause >nul

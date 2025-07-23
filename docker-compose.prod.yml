@@ -1,20 +1,18 @@
+# Production Docker Compose with DockerHub Images
+# ================================================
 services:
   # React Web Application
   ats-web:
-    image: ${WEB_IMAGE:-}
+    image: ${WEB_IMAGE:-nuniesmith/ats:web-latest}
+    # Fallback to local build if image not available
     build:
       context: ./src/web
       dockerfile: Dockerfile
-      args:
-        - VITE_API_URL=${VITE_API_URL:-http://localhost/api}
-        - VITE_SOCKET_URL=${VITE_SOCKET_URL:-http://localhost}
     container_name: ats-web-app
     ports:
       - "80:80"
     environment:
-      - NODE_ENV=${NODE_ENV:-production}
-      - VITE_API_URL=${VITE_API_URL:-http://localhost/api}
-      - VITE_SOCKET_URL=${VITE_SOCKET_URL:-http://localhost}
+      - NODE_ENV=production
     networks:
       - ats-network
     restart: unless-stopped
@@ -24,12 +22,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    depends_on:
-      - ats-api
 
   # Node.js API Server
   ats-api:
-    image: ${API_IMAGE:-}
+    image: ${API_IMAGE:-nuniesmith/ats:api-latest}
+    # Fallback to local build if image not available
     build:
       context: ./src/api
       dockerfile: Dockerfile
@@ -37,22 +34,20 @@ services:
     ports:
       - "3001:3001"
     environment:
-      - NODE_ENV=${NODE_ENV:-production}
+      - NODE_ENV=production
       - PORT=3001
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-change-this}
-      - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
+      - FRONTEND_URL=http://localhost
       - ATS_SERVER_PATH=/app/ats-server
-      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
-      - CLOUDFLARE_ZONE_ID=${CLOUDFLARE_ZONE_ID:-}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - CLOUDFLARE_ZONE_ID=${CLOUDFLARE_ZONE_ID}
       - DOMAIN_NAME=${DOMAIN_NAME:-ats.7gram.xyz}
-      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL:-}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
       - ATS_DEFAULT_PASSWORD=${ATS_DEFAULT_PASSWORD:-ruby}
       - STEAM_COLLECTION_ID=${STEAM_COLLECTION_ID:-3530633316}
-      - REDIS_URL=redis://redis:6379
     volumes:
       - ats-data:/app/data
       - ats-logs:/app/logs
-      - ats-config:/app/config
     networks:
       - ats-network
     restart: unless-stopped
@@ -63,8 +58,7 @@ services:
       retries: 3
       start_period: 30s
     depends_on:
-      redis:
-        condition: service_healthy
+      - redis
 
   # Redis for session storage
   redis:
@@ -83,7 +77,30 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes
+
+  # Nginx Reverse Proxy (Optional - for SSL termination)
+  nginx:
+    image: nginx:alpine
+    container_name: ats-nginx-proxy
+    ports:
+      - "443:443"
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/ssl:/etc/nginx/ssl:ro
+      - nginx-logs:/var/log/nginx
+    networks:
+      - ats-network
+    restart: unless-stopped
+    depends_on:
+      - ats-web
+      - ats-api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 # Networks
 networks:
@@ -99,9 +116,9 @@ volumes:
   ats-logs:
     name: ats-logs
     driver: local
-  ats-config:
-    name: ats-config
-    driver: local
   redis-data:
     name: ats-redis-data
+    driver: local
+  nginx-logs:
+    name: ats-nginx-logs
     driver: local

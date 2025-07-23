@@ -1,9 +1,13 @@
 #!/bin/bash
 
-# ATS Server Docker Deployment Script
+# ATS Server Master Deployment Script
 # ===================================
 
 set -e
+
+# Get the directory of this script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DOCKER_SCRIPTS_DIR="$SCRIPT_DIR/scripts/docker"
 
 # Colors for output
 RED='\033[0;31m'
@@ -12,239 +16,185 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-COMPOSE_FILE="docker-compose.yml"
-ENV_FILE=".env"
+echo "==============================================="
+echo "   ATS Server Management - Master Deployer"
+echo "==============================================="
+echo ""
 
-# Functions
-log_info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
-}
+# Check for command line argument
+if [ $# -eq 0 ]; then
+    show_menu
+    exit 0
+fi
 
-log_success() {
-    echo -e "${GREEN}✅ $1${NC}"
-}
+# Direct command execution
+command="$1"
+arg1="${2:-}"
+arg2="${3:-}"
 
-log_warning() {
-    echo -e "${YELLOW}⚠️  $1${NC}"
-}
-
-log_error() {
-    echo -e "${RED}❌ $1${NC}"
-}
-
-# Check if Docker is installed
-check_docker() {
-    log_info "Checking Docker installation..."
-    if ! command -v docker &> /dev/null; then
-        log_error "Docker is not installed. Please install Docker first."
+case "$command" in
+    "local")
+        echo "Launching Local Docker Deployment..."
+        "$DOCKER_SCRIPTS_DIR/deploy-local.sh" "$arg1" "$arg2"
+        exit 0
+        ;;
+    "dockerhub")
+        echo "Launching DockerHub Deployment..."
+        "$DOCKER_SCRIPTS_DIR/deploy-dockerhub.sh" "$arg1" "$arg2"
+        exit 0
+        ;;
+    "server")
+        echo "Launching ATS Server Manager..."
+        "$SCRIPT_DIR/scripts/ats_server_manager.bat"
+        exit 0
+        ;;
+    "help")
+        show_help
+        exit 0
+        ;;
+    *)
+        echo "Unknown command: $command"
+        show_help
         exit 1
-    fi
-    
-    if ! command -v docker-compose &> /dev/null; then
-        log_error "Docker Compose is not installed. Please install Docker Compose first."
-        exit 1
-    fi
-    
-    log_success "Docker and Docker Compose are installed"
-}
+        ;;
+esac
 
-# Create environment file if it doesn't exist
-create_env_file() {
-    if [ ! -f "$ENV_FILE" ]; then
-        log_info "Creating environment file..."
-        cat > "$ENV_FILE" << 'EOF'
-# ATS Server Environment Configuration
-# ===================================
-
-# Security
-JWT_SECRET=your-jwt-secret-change-this-in-production
-
-# Domain Configuration
-DOMAIN_NAME=ats.7gram.xyz
-
-# ATS Configuration
-ATS_DEFAULT_PASSWORD=ruby
-STEAM_COLLECTION_ID=3530633316
-
-# API URLs (automatically configured for Docker)
-VITE_API_URL=http://localhost/api
-VITE_SOCKET_URL=http://localhost
-
-# Optional: External Services
-CLOUDFLARE_API_TOKEN=
-CLOUDFLARE_ZONE_ID=
-DISCORD_WEBHOOK_URL=
-EOF
-        log_warning "Created $ENV_FILE - please edit it with your configuration"
-        log_info "You can start with default values for local development"
-    else
-        log_info "Using existing $ENV_FILE"
-    fi
-}
-
-# Build Docker images
-build_images() {
-    log_info "Building Docker images..."
-    
-    log_info "Building React web application..."
-    cd web
-    docker build -t ats-web:latest .
-    cd ..
-    
-    log_info "Building Node.js API server..."
-    cd api
-    docker build -t ats-api:latest .
-    cd ..
-    
-    log_success "Docker images built successfully"
-}
-
-# Start services
-start_services() {
-    log_info "Starting ATS services..."
-    
-    # Stop any existing containers
-    docker-compose down || true
-    
-    # Start new containers
-    docker-compose up -d
-    
-    log_success "Services started successfully"
-}
-
-# Check service health
-check_health() {
-    log_info "Checking service health..."
-    
-    # Wait for services to start
-    sleep 10
-    
-    # Check if containers are running
-    if docker-compose ps | grep -q "Up"; then
-        log_success "Containers are running"
-    else
-        log_error "Some containers failed to start"
-        docker-compose logs
-        exit 1
-    fi
-    
-    # Check web app health
-    for i in {1..30}; do
-        if curl -f http://localhost/health &> /dev/null; then
-            log_success "Web application is healthy"
-            break
-        fi
-        log_info "Waiting for web application... (attempt $i/30)"
-        sleep 2
-    done
-    
-    # Check API health
-    for i in {1..30}; do
-        if curl -f http://localhost:3001/health &> /dev/null; then
-            log_success "API server is healthy"
-            break
-        fi
-        log_info "Waiting for API server... (attempt $i/30)"
-        sleep 2
-    done
-}
-
-# Show deployment info
-show_info() {
+show_menu() {
+    echo "Select deployment method:"
     echo ""
-    log_success "🚀 ATS Server Management System is running!"
+    echo "1. Local Development (Build images locally)"
+    echo "2. Production (Pull from DockerHub)"
+    echo "3. ATS Server Manager (Game server management)"
+    echo "4. Help & Documentation"
+    echo "5. Exit"
     echo ""
-    echo "📍 Access Points:"
-    echo "   🌐 Web Interface: http://localhost"
-    echo "   🔧 API Server: http://localhost:3001"
-    echo "   📊 Health Check: http://localhost/health"
-    echo ""
-    echo "🔧 Management Commands:"
-    echo "   📋 View logs: docker-compose logs"
-    echo "   📊 View status: docker-compose ps"
-    echo "   🛑 Stop services: docker-compose down"
-    echo "   🔄 Restart services: docker-compose restart"
-    echo ""
-    echo "🔐 Default Login:"
-    echo "   👤 Username: admin"
-    echo "   🔑 Password: admin123"
-    echo ""
-}
-
-# Show logs
-show_logs() {
-    log_info "Showing container logs..."
-    docker-compose logs --tail=50 -f
-}
-
-# Stop services
-stop_services() {
-    log_info "Stopping ATS services..."
-    docker-compose down
-    log_success "Services stopped"
-}
-
-# Clean up (remove containers and images)
-cleanup() {
-    log_info "Cleaning up Docker resources..."
-    docker-compose down --volumes --remove-orphans
-    docker rmi ats-web:latest ats-api:latest 2>/dev/null || true
-    log_success "Cleanup completed"
-}
-
-# Main function
-main() {
-    case "$1" in
-        "start")
-            check_docker
-            create_env_file
-            build_images
-            start_services
-            check_health
-            show_info
-            ;;
-        "stop")
-            stop_services
-            ;;
-        "restart")
-            stop_services
-            start_services
-            check_health
-            show_info
-            ;;
-        "logs")
-            show_logs
-            ;;
-        "build")
-            check_docker
-            build_images
-            ;;
-        "cleanup")
-            cleanup
-            ;;
-        "status")
-            docker-compose ps
-            ;;
-        *)
-            echo "ATS Server Docker Deployment Script"
-            echo "=================================="
-            echo ""
-            echo "Usage: $0 {start|stop|restart|logs|build|cleanup|status}"
-            echo ""
-            echo "Commands:"
-            echo "  start    - Build and start all services"
-            echo "  stop     - Stop all services"
-            echo "  restart  - Restart all services"
-            echo "  logs     - Show container logs"
-            echo "  build    - Build Docker images only"
-            echo "  cleanup  - Stop services and remove containers/images"
-            echo "  status   - Show container status"
-            echo ""
-            exit 1
+    read -p "Enter your choice (1-5): " choice
+    
+    case "$choice" in
+        1) local_deployment ;;
+        2) dockerhub_deployment ;;
+        3) server_manager ;;
+        4) show_help ;;
+        5) exit 0 ;;
+        *) 
+            echo "Invalid choice. Please try again."
+            show_menu
             ;;
     esac
 }
 
-# Run main function with all arguments
-main "$@"
+local_deployment() {
+    echo ""
+    echo "================================================"
+    echo "          Local Development Deployment"
+    echo "================================================"
+    echo ""
+    echo "This will build Docker images locally and start services."
+    echo "Perfect for development and testing."
+    echo ""
+    "$DOCKER_SCRIPTS_DIR/deploy-local.sh" start
+}
+
+dockerhub_deployment() {
+    echo ""
+    echo "================================================"
+    echo "           Production Deployment"
+    echo "================================================"
+    echo ""
+    echo "Choose deployment mode:"
+    echo "1. Standard (Use local images if DockerHub fails)"
+    echo "2. Production (Force DockerHub images)"
+    echo "3. Specific Version"
+    echo "4. Back to main menu"
+    echo ""
+    read -p "Enter your choice (1-4): " prod_choice
+    
+    case "$prod_choice" in
+        1)
+            "$DOCKER_SCRIPTS_DIR/deploy-dockerhub.sh" start
+            ;;
+        2)
+            "$DOCKER_SCRIPTS_DIR/deploy-dockerhub.sh" start prod
+            ;;
+        3)
+            read -p "Enter version tag (e.g., v1.2.3): " version
+            "$DOCKER_SCRIPTS_DIR/deploy-dockerhub.sh" start prod "$version"
+            ;;
+        4)
+            show_menu
+            ;;
+        *)
+            echo "Invalid choice. Returning to main menu..."
+            sleep 2
+            show_menu
+            ;;
+    esac
+}
+
+server_manager() {
+    echo ""
+    echo "================================================"
+    echo "           ATS Server Manager"
+    echo "================================================"
+    echo ""
+    echo "Launching comprehensive ATS server management..."
+    "$SCRIPT_DIR/scripts/ats_server_manager.bat"
+}
+
+show_help() {
+    echo ""
+    echo "================================================"
+    echo "        ATS Server Management Help"
+    echo "================================================"
+    echo ""
+    echo "COMMAND LINE USAGE:"
+    echo "  $0 local [command]          - Local development deployment"
+    echo "  $0 dockerhub [command]      - DockerHub production deployment"
+    echo "  $0 server                   - ATS server management"
+    echo ""
+    echo "AVAILABLE COMMANDS:"
+    echo "  start, stop, restart, logs, status, build, cleanup"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  $0 local start              - Start local development"
+    echo "  $0 dockerhub start prod     - Start production from DockerHub"
+    echo "  $0 local logs ats-web       - Show web app logs"
+    echo "  $0 dockerhub status         - Check service status"
+    echo ""
+    echo "DEPLOYMENT METHODS:"
+    echo ""
+    echo "1. LOCAL DEVELOPMENT:"
+    echo "   - Builds Docker images from source code"
+    echo "   - Uses docker-compose.yml"
+    echo "   - Perfect for development and testing"
+    echo "   - Faster iteration on code changes"
+    echo ""
+    echo "2. PRODUCTION (DOCKERHUB):"
+    echo "   - Pulls pre-built images from DockerHub"
+    echo "   - Uses docker-compose.prod.yml for production"
+    echo "   - Faster deployment, smaller bandwidth usage"
+    echo "   - Supports version tags for rollbacks"
+    echo ""
+    echo "3. ATS SERVER MANAGER:"
+    echo "   - Comprehensive game server management"
+    echo "   - Mod collection utilities"
+    echo "   - Server configuration and monitoring"
+    echo "   - Automated server operations"
+    echo ""
+    echo "REQUIREMENTS:"
+    echo "  - Docker installed and running"
+    echo "  - Docker Compose available"
+    echo "  - Internet connection (for DockerHub deployment)"
+    echo ""
+    echo "DOCUMENTATION:"
+    echo "  - Check docs/ folder for detailed guides"
+    echo "  - README.md for quick start"
+    echo "  - DOCKER_README.md for Docker-specific info"
+    echo ""
+    
+    if [ $# -eq 0 ]; then
+        read -p "Press any key to return to menu..." -n 1
+        echo ""
+        show_menu
+    fi
+}

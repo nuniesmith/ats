@@ -14,11 +14,10 @@ on:
         options:
           - 'full-deploy'          # Deploy both React web app and ATS server
           - 'web-only'             # Deploy only React web interface
+          - 'docker-only'          # Deploy only Docker containers
           - 'ats-server-only'      # Deploy only ATS dedicated server
-          - 'client-package'       # Create client package for players
-          - 'update-mods'          # Update server mods only
-          - 'test-deployment'      # Test deployment without creating servers
-        default: 'web-only'
+          - 'update-server'        # Update existing deployment
+        default: 'docker-only'
       
       create_new_server:
         description: 'Create new Linode server for ATS'
@@ -34,7 +33,7 @@ on:
           - 'g6-standard-2'        # 2GB RAM, 1 CPU (recommended for ATS)
           - 'g6-standard-4'        # 4GB RAM, 2 CPU (for multiple servers)
           - 'g6-standard-8'        # 8GB RAM, 4 CPU (for heavy mod loads)
-        default: 'g6-standard-2'
+        default: 'g6-standard-4'
       
       target_region:
         description: 'Linode region for server'
@@ -49,12 +48,13 @@ on:
         default: 'ca-central'
 
 env:
-  DEPLOYMENT_MODE: ${{ github.event.inputs.deployment_mode || 'web-only' }}
+  DEPLOYMENT_MODE: ${{ github.event.inputs.deployment_mode || 'docker-only' }}
   CREATE_NEW_SERVER: ${{ github.event.inputs.create_new_server || 'false' }}
-  SERVER_TYPE: ${{ github.event.inputs.server_type || 'g6-standard-2' }}
+  SERVER_TYPE: ${{ github.event.inputs.server_type || 'g6-standard-4' }}
   TARGET_REGION: ${{ github.event.inputs.target_region || 'ca-central' }}
   DOMAIN_NAME: ats.7gram.xyz
   NODE_VERSION: '18'
+  DOCKER_REPO: nuniesmith/ats
 
 jobs:
   # ============================================================================
@@ -62,7 +62,7 @@ jobs:
   # ============================================================================
   infrastructure-check:
     name: 🏗️ Infrastructure Check
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     outputs:
       server-exists: ${{ steps.check-server.outputs.exists }}
       server-ip: ${{ steps.check-server.outputs.ip }}
@@ -79,14 +79,11 @@ jobs:
         run: |
           echo "🔍 Checking for existing ATS servers..."
           
-          # Install Linode CLI if not present
-          if ! command -v linode-cli &> /dev/null; then
-            echo "Installing Linode CLI..."
-            pip3 install linode-cli
-          fi
+          # Install Linode CLI
+          pip3 install linode-cli
           
           # Configure Linode CLI
-          echo "$LINODE_TOKEN" | linode-cli configure --token
+          linode-cli configure --token "$LINODE_TOKEN"
           
           # Check for existing servers
           SERVER_INFO=$(linode-cli linodes list --text --no-headers --format="label,ipv4,status" | grep "ats-server" || true)
@@ -96,7 +93,6 @@ jobs:
             SERVER_STATUS=$(echo "$SERVER_INFO" | awk '{print $3}')
             
             echo "✅ Found existing ATS server:"
-            echo "   Label: ats-server"
             echo "   Public IP: $SERVER_IP"
             echo "   Status: $SERVER_STATUS"
             
@@ -134,7 +130,7 @@ jobs:
   # ============================================================================
   create-server:
     name: 🔨 Create ATS Server
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: infrastructure-check
     if: needs.infrastructure-check.outputs.should-create == 'true'
     outputs:
@@ -151,114 +147,79 @@ jobs:
         run: |
           echo "🔨 Creating new ATS server..."
           
+          # Install Linode CLI
+          pip3 install linode-cli
+          linode-cli configure --token "$LINODE_TOKEN"
+          
           # Create the server
-          linode-cli linodes create \
+          RESULT=$(linode-cli linodes create \
             --label "ats-server" \
             --region "${{ env.TARGET_REGION }}" \
             --type "${{ env.SERVER_TYPE }}" \
-            --image "linode/arch" \
+            --image "linode/ubuntu22.04" \
             --root_pass "$ATS_ROOT_PASSWORD" \
-            --authorized_keys "$(cat ~/.ssh/id_rsa.pub)" \
-            --text --no-headers --format="ipv4" > server_ip.txt
+            --json)
           
-          SERVER_IP=$(cat server_ip.txt | tr -d '[]')
+          SERVER_IP=$(echo "$RESULT" | jq -r '.[0].ipv4[0]')
           echo "✅ Server created with IP: $SERVER_IP"
           echo "ip=$SERVER_IP" >> $GITHUB_OUTPUT
           
           # Wait for server to boot
           echo "⏳ Waiting for server to boot..."
           sleep 120
+
+      - name: 🔧 Initial Server Setup
+        env:
+          SERVER_IP: ${{ steps.create.outputs.ip }}
+          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
+        run: |
+          echo "🔧 Setting up server basics..."
           
-          # Test SSH connectivity
+          # Wait for SSH to be available
           for i in {1..10}; do
-            if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$SERVER_IP "echo 'Server ready'"; then
-              echo "✅ Server is ready for configuration"
+            if sshpass -p "$ATS_ROOT_PASSWORD" ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$SERVER_IP "echo 'Server ready'"; then
+              echo "✅ SSH connection established"
               break
             fi
             echo "⏳ Waiting for SSH... (attempt $i/10)"
             sleep 30
           done
-
-      - name: 🔧 Configure Server
-        env:
-          SERVER_IP: ${{ steps.create.outputs.ip }}
-          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          echo "🔧 Configuring new server..."
           
-          # Configure server via SSH
-          ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOL'
+          # Basic server setup
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
             # Update system
-            pacman -Syu --noconfirm
+            apt update && apt upgrade -y
             
             # Install essential packages
-            pacman -S --noconfirm nginx nodejs npm git wget curl unzip
+            apt install -y curl wget git unzip nginx
             
-            # Create actions user
-            useradd -m -s /bin/bash actions
-            echo "actions:${{ secrets.ACTIONS_USER_PASSWORD }}" | chpasswd
+            # Install Docker
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sh get-docker.sh
+            systemctl enable docker
+            systemctl start docker
             
-            # Add actions to sudoers
-            echo "actions ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+            # Install Docker Compose
+            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            chmod +x /usr/local/bin/docker-compose
             
-            # Install Tailscale
-            curl -fsSL https://tailscale.com/install.sh | sh
-            tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=ats-server
-            
-            # Create web directory
-            mkdir -p /var/www/ats
-            chown -R www-data:www-data /var/www/ats || chown -R nginx:nginx /var/www/ats
-            
-            # Configure Nginx
-            cat > /etc/nginx/sites-available/ats << 'NGINX_CONF'
-          server {
-              listen 80;
-              server_name ats.7gram.xyz;
-              root /var/www/ats;
-              index index.html index.htm;
-              
-              location / {
-                  try_files $uri $uri/ /index.html;
-              }
-              
-              location /api {
-                  proxy_pass http://localhost:3001;
-                  proxy_http_version 1.1;
-                  proxy_set_header Upgrade $http_upgrade;
-                  proxy_set_header Connection 'upgrade';
-                  proxy_set_header Host $host;
-                  proxy_cache_bypass $http_upgrade;
-              }
-              
-              location /socket.io {
-                  proxy_pass http://localhost:3001;
-                  proxy_http_version 1.1;
-                  proxy_set_header Upgrade $http_upgrade;
-                  proxy_set_header Connection "upgrade";
-                  proxy_set_header Host $host;
-              }
-          }
-          NGINX_CONF
-            
-            # Enable site
-            ln -sf /etc/nginx/sites-available/ats /etc/nginx/sites-enabled/
-            
-            # Start services
-            systemctl enable nginx
-            systemctl start nginx
-            systemctl enable tailscaled
-            
-            echo "✅ Server configuration completed"
-          EOL
+            # Configure firewall
+            ufw allow ssh
+            ufw allow http
+            ufw allow https
+            ufw --force enable
+          EOF
 
   # ============================================================================
-  # Build Docker Images
+  # Build and Push Docker Images to DockerHub
   # ============================================================================
   build-docker-images:
-    name: 🐳 Build Docker Images
-    runs-on: self-hosted
-    if: contains(fromJson('["web-only", "full-deploy"]'), github.event.inputs.deployment_mode || 'web-only')
+    name: 🐳 Build & Push Docker Images
+    runs-on: ubuntu-latest
+    if: contains(fromJson('["docker-only", "full-deploy", "web-only"]'), github.event.inputs.deployment_mode || 'docker-only')
+    outputs:
+      web-image: ${{ steps.meta.outputs.web-image }}
+      api-image: ${{ steps.meta.outputs.api-image }}
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
@@ -266,631 +227,217 @@ jobs:
       - name: 🐳 Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 🏗️ Build React Web App Image
+      - name: 🔐 Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: 🏷️ Generate image tags
+        id: meta
         run: |
-          echo "🏗️ Building React web application Docker image..."
-          cd web
-          docker build -t ats-web:latest .
-          docker save ats-web:latest > ../ats-web-image.tar
+          # Generate version tag
+          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+            VERSION="latest"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="pr-${{ github.event.number }}"
+          fi
+          
+          WEB_IMAGE="${{ env.DOCKER_REPO }}:web-${VERSION}"
+          API_IMAGE="${{ env.DOCKER_REPO }}:api-${VERSION}"
+          
+          echo "web-image=${WEB_IMAGE}" >> $GITHUB_OUTPUT
+          echo "api-image=${API_IMAGE}" >> $GITHUB_OUTPUT
+          
+          echo "🏷️ Will build:"
+          echo "  Web: ${WEB_IMAGE}"
+          echo "  API: ${API_IMAGE}"
 
-      - name: 🏗️ Build API Server Image
-        run: |
-          echo "🏗️ Building API server Docker image..."
-          cd api
-          docker build -t ats-api:latest .
-          docker save ats-api:latest > ../ats-api-image.tar
-
-      - name: 📤 Upload Docker Images
-        uses: actions/upload-artifact@v4
+      - name: 🏗️ Build and Push React Web App
+        uses: docker/build-push-action@v5
         with:
-          name: docker-images
-          path: |
-            ats-web-image.tar
-            ats-api-image.tar
-            docker-compose.yml
+          context: ./src/web
+          file: ./src/web/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.web-image }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VITE_API_URL=http://localhost/api
+            VITE_SOCKET_URL=http://localhost
 
-  # ============================================================================
-  # Build React Web Application (fallback)
-  # ============================================================================
-  build-web-app:
-    name: 🌐 Build React Web Application
-    runs-on: self-hosted
-    if: contains(fromJson('["web-only", "full-deploy"]'), github.event.inputs.deployment_mode || 'web-only')
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🔧 Setup Node.js
-        uses: actions/setup-node@v4
+      - name: 🏗️ Build and Push API Server
+        uses: docker/build-push-action@v5
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: 'web/package-lock.json'
-
-      - name: 📦 Install dependencies
-        working-directory: ./web
-        run: npm ci
-
-      - name: 🏗️ Build React application
-        working-directory: ./web
-        env:
-          VITE_API_URL: https://ats.7gram.xyz/api
-          VITE_SOCKET_URL: https://ats.7gram.xyz
-        run: npm run build
-
-      - name: 📤 Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: react-build
-          path: web/dist/
-
-  # ============================================================================
-  # Create Client Package
-  # ============================================================================
-  create-client-package:
-    name: 📦 Create Windows Client Package
-    runs-on: self-hosted
-    if: contains(fromJson('["client-package", "full-deploy"]'), github.event.inputs.deployment_mode || 'web-only')
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 📦 Create Windows Client Package
-        run: |
-          echo "📦 Creating Windows client package..."
-          mkdir -p client-package/windows
-          
-          # Create client connection script
-          cat > client-package/windows/Connect_To_ATS_Server.bat << 'EOL'
-          @echo off
-          title ATS Server Connector - Freddy's Server
-          
-          echo ==========================================
-          echo   ATS Server Connector - Freddy's Server
-          echo ==========================================
-          echo.
-          
-          set /p SERVER_ID="Enter Server ID (from Discord): "
-          
-          if "%SERVER_ID%"=="" (
-              echo Error: Server ID is required!
-              pause
-              exit /b 1
-          )
-          
-          echo.
-          echo Connecting to server: %SERVER_ID%
-          echo Password: ${{ secrets.ATS_DEFAULT_PASSWORD }}
-          echo Domain: ${{ env.DOMAIN_NAME }}
-          echo.
-          
-          start "" "steam://connect/${{ env.DOMAIN_NAME }}:27015/${{ secrets.ATS_DEFAULT_PASSWORD }}"
-          
-          echo.
-          echo ATS should be launching...
-          echo If it doesn't work, make sure:
-          echo   1. Steam is running
-          echo   2. ATS is installed
-          echo   3. You're connected to Tailscale VPN
-          echo.
-          pause
-          EOL
-          
-          # Create desktop shortcut creator
-          cat > client-package/windows/Create_Desktop_Shortcut.vbs << 'EOL'
-          Set oWS = WScript.CreateObject("WScript.Shell")
-          sLinkFile = oWS.SpecialFolders("Desktop") & "\ATS - Freddy's Server.lnk"
-          Set oLink = oWS.CreateShortcut(sLinkFile)
-          oLink.TargetPath = WScript.ScriptFullName.Replace(WScript.ScriptName, "Connect_To_ATS_Server.bat")
-          oLink.WorkingDirectory = WScript.ScriptFullName.Replace("\" & WScript.ScriptName, "")
-          oLink.Description = "Connect to Freddy's ATS Server"
-          oLink.Save
-          WScript.Echo "Desktop shortcut created successfully!"
-          EOL
-          
-          # Create README
-          cat > client-package/windows/README.txt << 'EOL'
-          ATS Client Package - Freddy's Server
-          ===================================
-          
-          QUICK SETUP:
-          1. Install Tailscale VPN from https://tailscale.com/download
-          2. Get invited to the Tailscale network (contact Freddy)
-          3. Double-click "Create_Desktop_Shortcut.vbs" to create desktop shortcut
-          4. Use the desktop shortcut to connect to the server
-          
-          CONNECTING:
-          - Double-click the desktop shortcut "ATS - Freddy's Server"
-          - Enter the Server ID when prompted (get this from Discord)
-          - Password is: ${{ secrets.ATS_DEFAULT_PASSWORD }}
-          
-          REQUIREMENTS:
-          - Steam with American Truck Simulator
-          - Tailscale VPN (for server access)
-          - Server ID from Discord
-          
-          SERVER DETAILS:
-          - Name: Freddy's ATS Dedicated Server
-          - Domain: ${{ env.DOMAIN_NAME }}
-          - Port: 27015
-          - Password: ${{ secrets.ATS_DEFAULT_PASSWORD }}
-          - Max Players: 8
-          - Mods: Collection ID ${{ secrets.STEAM_COLLECTION_ID }}
-          EOL
-          
-          echo "✅ Client package created successfully!"
-
-      - name: 📤 Upload Client Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-client-package
-          path: client-package/
+          context: ./src/api
+          file: ./src/api/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.api-image }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ============================================================================
   # Deploy to Server
   # ============================================================================
   deploy-to-server:
     name: 🚀 Deploy to ATS Server
-    runs-on: self-hosted
-    needs: [infrastructure-check, build-web-app, create-server]
-    if: |
-      always() && 
-      (needs.infrastructure-check.outputs.server-exists == 'true' || needs.create-server.result == 'success') &&
-      contains(fromJson('["web-only", "full-deploy"]'), github.event.inputs.deployment_mode || 'web-only') &&
-      needs.build-web-app.result == 'success'
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 📥 Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: react-build
-          path: ./web-build
-
-      - name: 🌐 Setup Tailscale Connection
-        run: |
-          echo "🌐 Connecting to Tailscale network..."
-          
-          # Install Tailscale if not present
-          if ! command -v tailscale &> /dev/null; then
-            curl -fsSL https://tailscale.com/install.sh | sh
-          fi
-          
-          # Connect to Tailscale
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --accept-routes
-          
-          # Wait for connection
-          sleep 10
-          
-          # Get server IP (from previous job or existing server)
-          SERVER_IP="${{ needs.infrastructure-check.outputs.server-ip }}"
-          if [ -z "$SERVER_IP" ] && [ "${{ needs.create-server.result }}" == "success" ]; then
-            SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
-          fi
-          
-          echo "SERVER_IP=$SERVER_IP" >> $GITHUB_ENV
-          
-          # Get Tailscale IP of the server
-          TAILSCALE_IP=$(tailscale status | grep "ats-server" | awk '{print $1}' || echo "")
-          
-          if [ -n "$TAILSCALE_IP" ]; then
-            echo "✅ Server Tailscale IP: $TAILSCALE_IP"
-            echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
-          else
-            echo "⚠️ Could not find server Tailscale IP, using public IP"
-            echo "TAILSCALE_IP=$SERVER_IP" >> $GITHUB_ENV
-          fi
-
-  deploy-docker-to-server:
-    name: 🚀 Deploy Docker to ATS Server
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [infrastructure-check, build-docker-images, create-server]
     if: |
       always() && 
       (needs.infrastructure-check.outputs.server-exists == 'true' || needs.create-server.result == 'success') &&
-      contains(fromJson('["web-only", "full-deploy"]'), github.event.inputs.deployment_mode || 'web-only') &&
+      contains(fromJson('["docker-only", "full-deploy", "web-only"]'), github.event.inputs.deployment_mode || 'docker-only') &&
       needs.build-docker-images.result == 'success'
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: � Download Docker Images
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-images
-          path: ./docker-artifacts
-
-      - name: 🌐 Setup Tailscale Connection
+      - name: 🎯 Determine Target Server
+        id: target
         run: |
-          echo "🌐 Connecting to Tailscale network..."
-          
-          # Install Tailscale if not present
-          if ! command -v tailscale &> /dev/null; then
-            curl -fsSL https://tailscale.com/install.sh | sh
-          fi
-          
-          # Connect to Tailscale
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --accept-routes
-          
-          # Wait for connection
-          sleep 10
-          
-          # Get server IP (from previous job or existing server)
-          SERVER_IP="${{ needs.infrastructure-check.outputs.server-ip }}"
-          if [ -z "$SERVER_IP" ] && [ "${{ needs.create-server.result }}" == "success" ]; then
-            SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
-          fi
-          
-          echo "SERVER_IP=$SERVER_IP" >> $GITHUB_ENV
-          
-          # Get Tailscale IP of the server
-          TAILSCALE_IP=$(tailscale status | grep "ats-server" | awk '{print $1}' || echo "")
-          
-          if [ -n "$TAILSCALE_IP" ]; then
-            echo "✅ Server Tailscale IP: $TAILSCALE_IP"
-            echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+          if [[ "${{ needs.infrastructure-check.outputs.server-exists }}" == "true" ]]; then
+            SERVER_IP="${{ needs.infrastructure-check.outputs.server-ip }}"
+            echo "Using existing server: $SERVER_IP"
           else
-            echo "⚠️ Could not find server Tailscale IP, using public IP"
-            echo "TAILSCALE_IP=$SERVER_IP" >> $GITHUB_ENV
+            SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
+            echo "Using new server: $SERVER_IP"
           fi
+          echo "server-ip=$SERVER_IP" >> $GITHUB_OUTPUT
 
-      - name: 🔄 Update Repository on Server
+      - name: 📦 Deploy Docker Stack
         env:
-          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          SERVER_IP: ${{ steps.target.outputs.server-ip }}
+          WEB_IMAGE: ${{ needs.build-docker-images.outputs.web-image }}
+          API_IMAGE: ${{ needs.build-docker-images.outputs.api-image }}
+          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
         run: |
-          echo "� Updating repository on server at $SERVER_IP..."
+          echo "🚀 Deploying to server: $SERVER_IP"
           
-          # Update or clone repository on server
-          sshpass -p "$ACTIONS_USER_PASSWORD" ssh -o StrictHostKeyChecking=no actions@$SERVER_IP << 'EOL'
-            # Check if repository exists
-            if [ -d "/home/actions/ats" ]; then
-              echo "📦 Updating existing repository..."
-              cd /home/actions/ats
-              git fetch origin
-              git reset --hard origin/main
-              git clean -fd
-            else
-              echo "📥 Cloning repository..."
-              cd /home/actions
-              git clone https://github.com/nuniesmith/ats.git
-              cd ats
-            fi
+          # Create deployment directory
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "mkdir -p /opt/ats"
+          
+          # Copy deployment files
+          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no docker-compose.prod.yml root@$SERVER_IP:/opt/ats/docker-compose.yml
+          
+          # Create environment file
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "cat > /opt/ats/.env << 'EOF'
+          NODE_ENV=production
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          DOMAIN_NAME=${{ env.DOMAIN_NAME }}
+          ATS_DEFAULT_PASSWORD=${{ secrets.ATS_DEFAULT_PASSWORD }}
+          STEAM_COLLECTION_ID=3530633316
+          WEB_IMAGE=$WEB_IMAGE
+          API_IMAGE=$API_IMAGE
+          CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID=${{ secrets.CLOUDFLARE_ZONE_ID }}
+          DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
+          EOF"
+          
+          # Deploy the stack
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
+            cd /opt/ats
+            docker-compose pull
+            docker-compose up -d
             
-            echo "✅ Repository updated successfully"
-          EOL
+            # Wait for health checks
+            echo 'Waiting for services to be healthy...'
+            for i in {1..30}; do
+              if curl -f http://localhost/health >/dev/null 2>&1; then
+                echo 'Web app is healthy'
+                break
+              fi
+              echo 'Waiting for web app... (attempt \$i/30)'
+              sleep 10
+            done
+            
+            for i in {1..30}; do
+              if curl -f http://localhost:3001/health >/dev/null 2>&1; then
+                echo 'API server is healthy'
+                break
+              fi
+              echo 'Waiting for API server... (attempt \$i/30)'
+              sleep 10
+            done
+          "
 
-      - name: 🐳 Deploy Docker Containers
+      - name: 🌐 Update DNS (if configured)
         env:
-          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
-          JWT_SECRET: ${{ secrets.ATS_SERVER_TOKEN }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          ATS_DEFAULT_PASSWORD: ${{ secrets.ATS_DEFAULT_PASSWORD }}
-          STEAM_COLLECTION_ID: ${{ secrets.STEAM_COLLECTION_ID }}
-        run: |
-          echo "🐳 Deploying Docker containers to server at $SERVER_IP..."
-          
-          # Copy Docker images to server
-          echo "📦 Uploading Docker images..."
-          scp -o StrictHostKeyChecking=no -p "$ACTIONS_USER_PASSWORD" \
-            docker-artifacts/ats-web-image.tar \
-            docker-artifacts/ats-api-image.tar \
-            docker-artifacts/docker-compose.yml \
-            actions@$SERVER_IP:/home/actions/ats/
-          
-          # Deploy containers on server
-          echo "� Starting Docker deployment..."
-          sshpass -p "$ACTIONS_USER_PASSWORD" ssh -o StrictHostKeyChecking=no actions@$SERVER_IP << 'EOL'
-            cd /home/actions/ats
-            
-            # Load Docker images
-            echo "📥 Loading Docker images..."
-            sudo docker load < ats-web-image.tar
-            sudo docker load < ats-api-image.tar
-            
-            # Create environment file
-            cat > .env << ENV_FILE
-          JWT_SECRET=$JWT_SECRET
-          CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN
-          CLOUDFLARE_ZONE_ID=$CLOUDFLARE_ZONE_ID
-          DOMAIN_NAME=ats.7gram.xyz
-          DISCORD_WEBHOOK_URL=$DISCORD_WEBHOOK_URL
-          ATS_DEFAULT_PASSWORD=$ATS_DEFAULT_PASSWORD
-          STEAM_COLLECTION_ID=$STEAM_COLLECTION_ID
-          ENV_FILE
-            
-            # Stop existing containers
-            echo "🛑 Stopping existing containers..."
-            sudo docker-compose down || true
-            
-            # Start new containers
-            echo "🚀 Starting new containers..."
-            sudo docker-compose up -d
-            
-            # Wait for containers to start
-            sleep 30
-            
-            # Check container health
-            echo "🏥 Checking container health..."
-            sudo docker-compose ps
-            
-            # Show logs for debugging
-            echo "📋 Container logs:"
-            sudo docker-compose logs --tail=20
-            
-            echo "✅ Docker deployment completed"
-          EOL
-
-      - name: 🌍 Update Cloudflare DNS with Tailscale IP
-        env:
+          SERVER_IP: ${{ steps.target.outputs.server-ip }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
         run: |
-          if [ -n "$TAILSCALE_IP" ]; then
-            echo "🌍 Updating Cloudflare DNS record..."
+          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ZONE_ID" ]]; then
+            echo "🌐 Updating DNS records..."
             
-            # Get current DNS record
-            RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?name=$DOMAIN_NAME&type=A" \
+            # Update A record to point to new server
+            curl -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
               -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              -H "Content-Type: application/json" | jq -r '.result[0].id // empty')
-            
-            if [ -n "$RECORD_ID" ]; then
-              # Update existing record with Tailscale IP
-              curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
-                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$TAILSCALE_IP\",\"ttl\":300}" \
-                | jq '.success'
-              
-              echo "✅ DNS record updated: $DOMAIN_NAME → $TAILSCALE_IP"
-            else
-              # Create new record with Tailscale IP
-              curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                -H "Content-Type: application/json" \
-                --data "{\"type\":\"A\",\"name\":\"$DOMAIN_NAME\",\"content\":\"$TAILSCALE_IP\",\"ttl\":300}" \
-                | jq '.success'
-              
-              echo "✅ DNS record created: $DOMAIN_NAME → $TAILSCALE_IP"
-            fi
+              -H "Content-Type: application/json" \
+              --data '{"type":"A","name":"${{ env.DOMAIN_NAME }}","content":"'$SERVER_IP'"}'
           else
-            echo "⚠️ No Tailscale IP found, skipping DNS update"
+            echo "ℹ️ Cloudflare credentials not configured, skipping DNS update"
           fi
-
-  # ============================================================================
-  # Deploy ATS Server (if requested)
-  # ============================================================================
-  deploy-ats-server:
-    name: 🎮 Deploy ATS Dedicated Server
-    runs-on: self-hosted
-    needs: [infrastructure-check, deploy-docker-to-server, create-server]
-    if: |
-      always() && 
-      contains(fromJson('["ats-server-only", "full-deploy"]'), github.event.inputs.deployment_mode || 'web-only') &&
-      (needs.infrastructure-check.outputs.server-exists == 'true' || needs.create-server.result == 'success')
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🎮 Install ATS Dedicated Server
-        env:
-          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
-          ATS_SERVER_TOKEN: ${{ secrets.ATS_SERVER_TOKEN }}
-          ATS_DEFAULT_PASSWORD: ${{ secrets.ATS_DEFAULT_PASSWORD }}
-          STEAM_COLLECTION_ID: ${{ secrets.STEAM_COLLECTION_ID }}
-        run: |
-          SERVER_IP="${{ needs.infrastructure-check.outputs.server-ip }}"
-          if [ -z "$SERVER_IP" ] && [ "${{ needs.create-server.result }}" == "success" ]; then
-            SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
-          fi
-          
-          echo "🎮 Installing ATS Dedicated Server on $SERVER_IP..."
-          
-          # Install ATS server via SSH
-          sshpass -p "$ACTIONS_USER_PASSWORD" ssh -o StrictHostKeyChecking=no actions@$SERVER_IP << 'EOL'
-            # Install SteamCMD
-            sudo pacman -S --noconfirm lib32-gcc-libs
-            
-            # Create steam user
-            sudo useradd -m steam
-            sudo su - steam -c "
-              # Download SteamCMD
-              curl -sqL 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz' | tar zxvf -
-              
-              # Install ATS Dedicated Server
-              ./steamcmd.sh +force_install_dir ./ats-server +login anonymous +app_update 270880 validate +quit
-              
-              # Configure server
-              mkdir -p ./ats-server/config
-              cat > ./ats-server/config/server_config.sii << 'ATS_CONFIG'
-          SiiNunit
-          {
-          server_config : _nameless.1.2.3 {
-              name: \"Freddy's ATS Dedicated Server\"
-              description: \"Welcome to Freddy's ATS Server! Join our Discord for the latest updates.\"
-              password: \"$ATS_DEFAULT_PASSWORD\"
-              max_players: 8
-              max_vehicles_total: 100
-              max_ai_vehicles_player: 50
-              max_ai_vehicles_player_spawn: 50
-              connection_virtual_port: 100
-              query_virtual_port: 101
-              server_logon_token: \"$ATS_SERVER_TOKEN\"
-              player_file_check: true
-              player_file_check_crash: 0
-              hide_in_company: false
-              force_speed_limiter: false
-              force_air_brake_sim: false
-              timezones: 1
-              service_no_passengers: false
-              initial_economy: 1
-              disable_autosave: 0
-              server_packages: [
-                  \"mod_workshop_package.$STEAM_COLLECTION_ID\"
-              ]
-          }
-          }
-          ATS_CONFIG
-            "
-            
-            # Create systemd service
-            sudo tee /etc/systemd/system/ats-server.service << 'SERVICE'
-          [Unit]
-          Description=American Truck Simulator Dedicated Server
-          After=network.target
-          
-          [Service]
-          Type=simple
-          User=steam
-          WorkingDirectory=/home/steam/ats-server
-          ExecStart=/home/steam/ats-server/bin/linux_x64/eurotrucks2_server
-          Restart=always
-          RestartSec=10
-          
-          [Install]
-          WantedBy=multi-user.target
-          SERVICE
-            
-            # Enable and start service
-            sudo systemctl daemon-reload
-            sudo systemctl enable ats-server
-            sudo systemctl start ats-server
-            
-            echo "✅ ATS Dedicated Server installed and started"
-          EOL
 
   # ============================================================================
   # Deployment Summary & Notifications
   # ============================================================================
   deployment-summary:
     name: 📋 Deployment Summary
-    runs-on: self-hosted
-    needs: [infrastructure-check, build-docker-images, create-client-package, deploy-docker-to-server, deploy-ats-server, create-server]
+    runs-on: ubuntu-latest
+    needs: [infrastructure-check, build-docker-images, deploy-to-server, create-server]
     if: always()
     steps:
-      - name: 📊 Generate Summary
+      - name: 📋 Generate Summary
         run: |
-          echo "📋 ATS Deployment Summary"
-          echo "========================"
-          echo "Deployment Mode: ${{ env.DEPLOYMENT_MODE }}"
-          echo "Timestamp: $(date)"
-          echo ""
+          echo "# 🚀 ATS Server Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Deployment Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-          # Infrastructure status
-          if [[ "${{ needs.infrastructure-check.outputs.server-exists }}" == "true" ]]; then
-            echo "✅ Infrastructure: Used existing server"
-            echo "   Server IP: ${{ needs.infrastructure-check.outputs.server-ip }}"
-          elif [[ "${{ needs.create-server.result }}" == "success" ]]; then
-            echo "✅ Infrastructure: Created new server"
-            echo "   Server IP: ${{ needs.create-server.outputs.server-ip }}"
-          else
-            echo "⏭️ Infrastructure: No server operations"
+          if [[ "${{ needs.create-server.result }}" == "success" ]]; then
+            echo "✅ **New Server Created**: ${{ needs.create-server.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.infrastructure-check.outputs.server-exists }}" == "true" ]]; then
+            echo "✅ **Using Existing Server**: ${{ needs.infrastructure-check.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
           fi
           
-          # Web app status
           if [[ "${{ needs.build-docker-images.result }}" == "success" ]]; then
-            echo "✅ Docker Images: Built successfully"
-          elif [[ "${{ needs.build-docker-images.result }}" == "skipped" ]]; then
-            echo "⏭️ Docker Images: Skipped"
-          else
-            echo "❌ Docker Images: ${{ needs.build-docker-images.result }}"
+            echo "✅ **Docker Images Built and Pushed**" >> $GITHUB_STEP_SUMMARY
+            echo "   - Web: ${{ needs.build-docker-images.outputs.web-image }}" >> $GITHUB_STEP_SUMMARY
+            echo "   - API: ${{ needs.build-docker-images.outputs.api-image }}" >> $GITHUB_STEP_SUMMARY
           fi
           
-          # Client package status
-          if [[ "${{ needs.create-client-package.result }}" == "success" ]]; then
-            echo "✅ Client Package: Created successfully"
-          elif [[ "${{ needs.create-client-package.result }}" == "skipped" ]]; then
-            echo "⏭️ Client Package: Skipped"
-          else
-            echo "❌ Client Package: ${{ needs.create-client-package.result }}"
+          if [[ "${{ needs.deploy-to-server.result }}" == "success" ]]; then
+            echo "✅ **Deployment Successful**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## 🌐 Access Points" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web Interface**: http://${{ env.DOMAIN_NAME }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **API Server**: http://${{ env.DOMAIN_NAME }}:3001" >> $GITHUB_STEP_SUMMARY
           fi
-          
-          # Deployment status
-          if [[ "${{ needs.deploy-docker-to-server.result }}" == "success" ]]; then
-            echo "✅ Docker Deployment: Completed successfully"
-          elif [[ "${{ needs.deploy-docker-to-server.result }}" == "skipped" ]]; then
-            echo "⏭️ Docker Deployment: Skipped"
-          else
-            echo "❌ Docker Deployment: ${{ needs.deploy-docker-to-server.result }}"
-          fi
-          
-          # ATS server status
-          if [[ "${{ needs.deploy-ats-server.result }}" == "success" ]]; then
-            echo "✅ ATS Server: Deployed successfully"
-          elif [[ "${{ needs.deploy-ats-server.result }}" == "skipped" ]]; then
-            echo "⏭️ ATS Server: Skipped"
-          else
-            echo "❌ ATS Server: ${{ needs.deploy-ats-server.result }}"
-          fi
-          
-          echo ""
-          echo "🌐 Web Interface: https://${{ env.DOMAIN_NAME }}"
-          echo "🔒 VPN Required: Tailscale"
-          echo "📦 Client Package: Available for download"
-          echo "🎮 ATS Server: ${{ env.DOMAIN_NAME }}:27015"
-          echo "🔑 Server Password: ${{ secrets.ATS_DEFAULT_PASSWORD }}"
 
-      - name: 💬 Send Discord Notification
+      - name: 📢 Discord Notification
         if: env.DISCORD_WEBHOOK_URL != ''
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          # Determine overall status
-          if [[ "${{ needs.deploy-docker-to-server.result }}" == "success" ]] || [[ "${{ needs.deploy-ats-server.result }}" == "success" ]]; then
-            STATUS_EMOJI="✅"
-            STATUS_COLOR="3066993"
-            STATUS_TITLE="ATS Deployment Successful!"
-          else
-            STATUS_EMOJI="❌"
-            STATUS_COLOR="15158332"
-            STATUS_TITLE="ATS Deployment Failed"
+          STATUS="✅ Success"
+          if [[ "${{ needs.deploy-to-server.result }}" != "success" ]]; then
+            STATUS="❌ Failed"
           fi
           
-          # Send Discord notification
           curl -H "Content-Type: application/json" \
-            -X POST \
-            -d "{
-              \"embeds\": [{
-                \"title\": \"$STATUS_TITLE\",
-                \"color\": $STATUS_COLOR,
-                \"fields\": [
-                  {
-                    \"name\": \"Deployment Mode\",
-                    \"value\": \"\`${{ env.DEPLOYMENT_MODE }}\`\",
-                    \"inline\": true
-                  },
-                  {
-                    \"name\": \"Web Interface\",
-                    \"value\": \"https://${{ env.DOMAIN_NAME }}\",
-                    \"inline\": true
-                  },
-                  {
-                    \"name\": \"ATS Server\",
-                    \"value\": \"${{ env.DOMAIN_NAME }}:27015\",
-                    \"inline\": true
-                  },
-                  {
-                    \"name\": \"Access Requirements\",
-                    \"value\": \"Tailscale VPN connection required\",
-                    \"inline\": false
-                  },
-                  {
-                    \"name\": \"Server Password\",
-                    \"value\": \"\`${{ secrets.ATS_DEFAULT_PASSWORD }}\`\",
-                    \"inline\": true
-                  },
-                  {
-                    \"name\": \"Workshop Collection\",
-                    \"value\": \"${{ secrets.STEAM_COLLECTION_ID }}\",
-                    \"inline\": true
-                  }
-                ],
-                \"footer\": {
-                  \"text\": \"ATS Server Management System\"
-                },
-                \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\"
+            -d '{
+              "embeds": [{
+                "title": "🚀 ATS Server Deployment",
+                "description": "Deployment Status: '$STATUS'",
+                "color": 3066993,
+                "fields": [
+                  {"name": "Domain", "value": "${{ env.DOMAIN_NAME }}", "inline": true},
+                  {"name": "Commit", "value": "${{ github.sha }}", "inline": true}
+                ]
               }]
-            }" \
-            "$DISCORD_WEBHOOK_URL"
+            }' \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}"
