@@ -1,10 +1,10 @@
 SiiNunit
 {
-server_config : _nameless.226.921f.7410 {
- lobby_name: "American Truck Simulator server"
- description: ""
- welcome_message: ""
- password: ""
+server_config : .config {
+ lobby_name: "Freddy's ATS Dedicated Server"
+ description: "Enhanced ATS server with curated sound and graphics mods"
+ welcome_message: "Welcome to Freddy's server! Enjoy the enhanced experience with optional mods enabled."
+ password: "ruby"
  max_players: 8
  max_vehicles_total: 100
  max_ai_vehicles_player: 50
@@ -13,13 +13,13 @@ server_config : _nameless.226.921f.7410 {
  query_virtual_port: 101
  connection_dedicated_port: 27015
  query_dedicated_port: 27016
- server_logon_token: ""
+ server_logon_token: "15AE684920A1694E27BFA8B64F75AD1B"
  player_damage: true
  traffic: true
  hide_in_company: false
  hide_colliding: true
  force_speed_limiter: false
- mods_optioning: false
+ mods_optioning: true
  timezones: 0
  service_no_collision: false
  in_menu_ghosting: false
@@ -27,6 +27,10 @@ server_config : _nameless.226.921f.7410 {
  friends_only: false
  show_server: true
  moderator_list: 0
+ mods: .mods {
+  active[0]: "/mod/154_content.scs"
+  active[1]: "/mod/downgrade_info_package.scs"
+  active[2]: "/mod/sound.scs"
+ }
 }
-
 }
