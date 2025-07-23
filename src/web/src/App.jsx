@@ -20,8 +20,8 @@ import { SocketProvider } from './contexts/SocketContext'
 function App() {
   return (
     <div className="App min-h-screen bg-gradient-to-br from-gray-900 via-ats-dark to-gray-900">
-      <SocketProvider>
-        <ServerProvider>
+      <ServerProvider>
+        <SocketProvider>
           <Layout>
             <Routes>
               <Route path="/" element={<Dashboard />} />
@@ -34,8 +34,8 @@ function App() {
               <Route path="/client-package" element={<ClientPackage />} />
             </Routes>
           </Layout>
-        </ServerProvider>
-      </SocketProvider>
+        </SocketProvider>
+      </ServerProvider>
     </div>
   )
 }

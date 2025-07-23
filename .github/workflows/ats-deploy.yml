@@ -80,6 +80,8 @@ jobs:
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
         run: |
           echo "🔐 Validating required secrets..."
           
@@ -91,6 +93,8 @@ jobs:
           [[ -z "$JWT_SECRET" ]] && MISSING_SECRETS+=("JWT_SECRET")
           [[ -z "$DOCKER_USERNAME" ]] && MISSING_SECRETS+=("DOCKER_USERNAME")
           [[ -z "$DOCKER_TOKEN" ]] && MISSING_SECRETS+=("DOCKER_TOKEN")
+          [[ -z "$CLOUDFLARE_API_TOKEN" ]] && MISSING_SECRETS+=("CLOUDFLARE_API_TOKEN")
+          [[ -z "$CLOUDFLARE_ZONE_ID" ]] && MISSING_SECRETS+=("CLOUDFLARE_ZONE_ID")
           
           if [[ ${#MISSING_SECRETS[@]} -gt 0 ]]; then
             echo "❌ Missing required secrets:"
@@ -104,8 +108,6 @@ jobs:
           
           # Optional secrets check
           OPTIONAL_SECRETS=()
-          [[ -z "${{ secrets.CLOUDFLARE_API_TOKEN }}" ]] && OPTIONAL_SECRETS+=("CLOUDFLARE_API_TOKEN")
-          [[ -z "${{ secrets.CLOUDFLARE_ZONE_ID }}" ]] && OPTIONAL_SECRETS+=("CLOUDFLARE_ZONE_ID")
           [[ -z "${{ secrets.DISCORD_WEBHOOK_URL }}" ]] && OPTIONAL_SECRETS+=("DISCORD_WEBHOOK_URL")
           
           if [[ ${#OPTIONAL_SECRETS[@]} -gt 0 ]]; then
@@ -355,6 +357,8 @@ jobs:
           SERVER_IP: ${{ steps.create.outputs.ip }}
           ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          NETDATA_CLAIM_TOKEN: ${{ secrets.NETDATA_CLAIM_TOKEN }}
+          NETDATA_CLAIM_ROOMS: ${{ secrets.NETDATA_CLAIM_ROOMS }}
         run: |
           echo "🔧 Stage 1: Initial Arch Linux setup..."
           
@@ -369,7 +373,8 @@ jobs:
           done
           
           # Stage 1: System setup and stage 2 service creation
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
+            "export NETDATA_CLAIM_TOKEN='$NETDATA_CLAIM_TOKEN' && export NETDATA_CLAIM_ROOMS='$NETDATA_CLAIM_ROOMS'" << 'EOF'
             echo "🔧 Stage 1: System initialization..."
             
             # Update system
@@ -386,11 +391,66 @@ jobs:
               curl -fsSL https://tailscale.com/install.sh | sh
             }
             
-            # Install Netdata
-            echo "📦 Installing Netdata..."
-            pacman -S --noconfirm netdata || {
-              echo "Installing Netdata manually..."
-              curl -fsSL https://get.netdata.cloud/kickstart.sh | sh -s -- --stable-channel --disable-telemetry
+            # Install Netdata with cloud integration
+            echo "📦 Installing Netdata with cloud integration..."
+            if pacman -S --noconfirm netdata; then
+              echo "✅ Netdata installed via pacman"
+            else
+              echo "Installing Netdata manually via kickstart script..."
+              curl -fsSL https://get.netdata.cloud/kickstart.sh | sh -s -- --stable-channel --disable-telemetry --claim-token="${NETDATA_CLAIM_TOKEN:-}" --claim-rooms="${NETDATA_CLAIM_ROOMS:-}" --claim-url="https://app.netdata.cloud"
+            fi
+            
+            # Configure Netdata for cloud access if tokens are provided
+            if [[ -n "${NETDATA_CLAIM_TOKEN:-}" && -n "${NETDATA_CLAIM_ROOMS:-}" ]]; then
+              echo "🔗 Configuring Netdata cloud integration..."
+              # Create netdata cloud configuration
+              mkdir -p /etc/netdata
+              cat > /etc/netdata/netdata.conf << 'NETDATAEOF'
+          [global]
+              hostname = ats-server
+              history = 86400
+              memory mode = dbengine
+              page cache size = 32
+              dbengine disk space = 256
+          
+          [web]
+              mode = multi-threaded
+              web files owner = root
+              web files group = netdata
+              bind to = *:19999
+              allow connections from = localhost 10.* 192.168.* 172.16.* 172.17.* 172.18.* 172.19.* 172.20.* 172.21.* 172.22.* 172.23.* 172.24.* 172.25.* 172.26.* 172.27.* 172.28.* 172.29.* 172.30.* 172.31.* 100.*
+          
+          [plugins]
+              proc = yes
+              diskspace = yes
+              cgroups = yes
+              tc = no
+              idlejitter = yes
+              checks = no
+              apps = yes
+              charts.d = yes
+              node.d = yes
+              python.d = yes
+              go.d = yes
+          NETDATAEOF
+              
+              # Claim the node to Netdata Cloud
+              if command -v netdata-claim.sh >/dev/null 2>&1; then
+                netdata-claim.sh -token="${NETDATA_CLAIM_TOKEN}" -rooms="${NETDATA_CLAIM_ROOMS}" -url="https://app.netdata.cloud"
+                echo "✅ Netdata claimed to cloud"
+              else
+                echo "⚠️ Netdata claim script not found, will retry in Stage 2"
+              fi
+            else
+              echo "ℹ️ Netdata cloud tokens not provided, running in standalone mode"
+            fi
+            
+            # Install Certbot for SSL certificates
+            echo "📦 Installing Certbot for SSL certificates..."
+            pacman -S --noconfirm certbot certbot-nginx || {
+              echo "Installing Certbot manually..."
+              pacman -S --noconfirm python-pip
+              pip install certbot certbot-nginx
             }
             
             # Configure system optimizations
@@ -481,9 +541,32 @@ jobs:
           fi
           echo "✅ Docker and docker-compose ready"
           
-          # Start and configure Netdata
+          # Start and configure Netdata with cloud integration
+          echo "📊 Starting Netdata monitoring..."
           systemctl start netdata
+          
+          # Retry cloud claiming if not done in Stage 1
+          if [[ -n "$NETDATA_CLAIM_TOKEN" && -n "$NETDATA_CLAIM_ROOMS" ]]; then
+            echo "🔗 Attempting Netdata cloud claim..."
+            if command -v netdata-claim.sh >/dev/null 2>&1; then
+              netdata-claim.sh -token="$NETDATA_CLAIM_TOKEN" -rooms="$NETDATA_CLAIM_ROOMS" -url="https://app.netdata.cloud" || echo "⚠️ Netdata cloud claim failed, check tokens"
+            elif [[ -f /usr/libexec/netdata/netdata-claim.sh ]]; then
+              /usr/libexec/netdata/netdata-claim.sh -token="$NETDATA_CLAIM_TOKEN" -rooms="$NETDATA_CLAIM_ROOMS" -url="https://app.netdata.cloud" || echo "⚠️ Netdata cloud claim failed, check tokens"
+            else
+              echo "⚠️ Netdata claim script not found"
+            fi
+            
+            # Restart Netdata after claiming
+            systemctl restart netdata
+            sleep 5
+          fi
+          
           echo "✅ Netdata monitoring started on port 19999"
+          echo "🌐 Netdata will be available at: http://\$(hostname -I 2>/dev/null | awk '{print \$1}' || ip route get 1 | awk '{print \$7; exit}'):19999"
+          
+          if [[ -n "$NETDATA_CLAIM_TOKEN" ]]; then
+            echo "☁️ Netdata cloud integration configured - check https://app.netdata.cloud"
+          fi
           
           # Configure firewall for Arch Linux
           if command -v ufw >/dev/null 2>&1; then
@@ -530,6 +613,8 @@ jobs:
           [Service]
           Type=oneshot
           Environment=TAILSCALE_AUTH_KEY=$TAILSCALE_AUTH_KEY
+          Environment=NETDATA_CLAIM_TOKEN=$NETDATA_CLAIM_TOKEN
+          Environment=NETDATA_CLAIM_ROOMS=$NETDATA_CLAIM_ROOMS
           ExecStart=/opt/ats-stage2-deploy.sh
           RemainAfterExit=yes
           StandardOutput=journal
@@ -550,6 +635,17 @@ jobs:
           if [[ -n "$TAILSCALE_AUTH_KEY" ]]; then
             sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
               "sed -i 's/\$TAILSCALE_AUTH_KEY/$TAILSCALE_AUTH_KEY/' /etc/systemd/system/ats-stage2.service"
+          fi
+          
+          # Set Netdata environment variables in the service
+          if [[ -n "$NETDATA_CLAIM_TOKEN" ]]; then
+            sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
+              "sed -i 's/\$NETDATA_CLAIM_TOKEN/$NETDATA_CLAIM_TOKEN/' /etc/systemd/system/ats-stage2.service"
+          fi
+          
+          if [[ -n "$NETDATA_CLAIM_ROOMS" ]]; then
+            sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
+              "sed -i 's/\$NETDATA_CLAIM_ROOMS/$NETDATA_CLAIM_ROOMS/' /etc/systemd/system/ats-stage2.service"
           fi
           
           # Reload systemd and reboot
@@ -951,6 +1047,60 @@ jobs:
               echo "❌ No Tailscale auth key provided"
               echo "TAILSCALE_IP=" >> $GITHUB_ENV
             fi
+          fi
+
+      - name: 🔒 Setup SSL Certificates
+        env:
+          SERVER_IP: ${{ steps.target.outputs.server-ip }}
+          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
+          DOMAIN_NAME: ${{ env.DOMAIN_NAME }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          echo "🔒 Setting up SSL certificates for $DOMAIN_NAME..."
+          
+          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$DOMAIN_NAME" ]]; then
+            sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
+              # Install Cloudflare DNS plugin for Certbot
+              echo '📦 Installing Certbot Cloudflare plugin...'
+              pip install certbot-dns-cloudflare || {
+                pacman -S --noconfirm python-pip
+                pip install certbot-dns-cloudflare
+              }
+              
+              # Create Cloudflare credentials file
+              mkdir -p /root/.secrets
+              cat > /root/.secrets/cloudflare.ini << 'CFEOF'
+          dns_cloudflare_api_token = $CLOUDFLARE_API_TOKEN
+          CFEOF
+              chmod 600 /root/.secrets/cloudflare.ini
+              
+              # Request SSL certificates for all domains
+              echo '🔒 Requesting SSL certificates...'
+              certbot certonly \\
+                --dns-cloudflare \\
+                --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \\
+                --dns-cloudflare-propagation-seconds 60 \\
+                --email admin@7gram.xyz \\
+                --agree-tos \\
+                --non-interactive \\
+                --expand \\
+                -d $DOMAIN_NAME \\
+                -d www.$DOMAIN_NAME \\
+                -d api.$DOMAIN_NAME || {
+                echo '⚠️ SSL certificate request failed, will continue with HTTP'
+                exit 0
+              }
+              
+              if [[ -f /etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem ]]; then
+                echo '✅ SSL certificates obtained successfully'
+                ls -la /etc/letsencrypt/live/$DOMAIN_NAME/
+              else
+                echo '❌ SSL certificate files not found'
+              fi
+            "
+          else
+            echo "⚠️ Cloudflare API token not configured, skipping SSL setup"
+            echo "   Configure CLOUDFLARE_API_TOKEN secret for automatic SSL certificates"
           fi
 
       - name: 🌐 Update Cloudflare DNS Records
