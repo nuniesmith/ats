@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { 
   Download, 
   Package, 
-  Windows, 
+  Monitor, 
   Settings, 
   Copy,
   Check,
@@ -238,7 +238,7 @@ function ClientPackage() {
         <div className="space-y-4">
           {!packageReady ? (
             <div className="text-center py-8">
-              <Windows className="w-16 h-16 mx-auto mb-4 text-ats-primary opacity-50" />
+              <Monitor className="w-16 h-16 mx-auto mb-4 text-ats-primary opacity-50" />
               <h4 className="text-lg font-medium text-white mb-2">
                 Ready to generate Windows client package
               </h4>
