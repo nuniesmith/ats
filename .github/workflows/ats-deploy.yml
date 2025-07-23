@@ -49,7 +49,7 @@ on:
 
 env:
   DEPLOYMENT_MODE: ${{ github.event.inputs.deployment_mode || 'docker-only' }}
-  CREATE_NEW_SERVER: ${{ github.event.inputs.create_new_server || 'false' }}
+  CREATE_NEW_SERVER: ${{ github.event.inputs.create_new_server || 'true' }}
   SERVER_TYPE: ${{ github.event.inputs.server_type || 'g6-standard-4' }}
   TARGET_REGION: ${{ github.event.inputs.target_region || 'ca-central' }}
   DOMAIN_NAME: ats.7gram.xyz
@@ -160,26 +160,25 @@ jobs:
             exit 0
           fi
           
-          # Install Linode CLI
-          pip3 install linode-cli
+          # Check for existing servers using API
+          echo "🔍 Querying Linode API for existing servers..."
+          SERVERS_RESPONSE=$(curl -H "Authorization: Bearer $LINODE_TOKEN" \
+            "https://api.linode.com/v4/linode/instances" 2>/dev/null)
           
-          # Configure Linode CLI non-interactively
-          mkdir -p ~/.config/linode-cli
-          cat > ~/.config/linode-cli/config << EOF
-          [DEFAULT]
-          token = $LINODE_TOKEN
-          region = us-east
-          type = g6-nanode-1
-          image = linode/ubuntu22.04
-          authorized_users = 
-          EOF
+          if [[ $? -ne 0 ]]; then
+            echo "❌ Failed to query Linode API"
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "ip=" >> $GITHUB_OUTPUT
+            echo "status=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           
-          # Check for existing servers
-          SERVER_INFO=$(linode-cli linodes list --text --no-headers --format="label,ipv4,status" | grep "ats-server" || true)
+          # Look for ATS server
+          SERVER_INFO=$(echo "$SERVERS_RESPONSE" | jq -r '.data[] | select(.label == "ats-server") | "\(.ipv4[0]) \(.status)"' 2>/dev/null)
           
           if [ -n "$SERVER_INFO" ]; then
-            SERVER_IP=$(echo "$SERVER_INFO" | awk '{print $2}' | tr -d '[]')
-            SERVER_STATUS=$(echo "$SERVER_INFO" | awk '{print $3}')
+            SERVER_IP=$(echo "$SERVER_INFO" | awk '{print $1}')
+            SERVER_STATUS=$(echo "$SERVER_INFO" | awk '{print $2}')
             
             echo "✅ Found existing ATS server:"
             echo "   Public IP: $SERVER_IP"
@@ -252,22 +251,39 @@ jobs:
           cat > ~/.config/linode-cli/config << EOF
           [DEFAULT]
           token = $LINODE_TOKEN
-          region = us-east
-          type = g6-nanode-1
+          region = ${{ env.TARGET_REGION }}
+          type = ${{ env.SERVER_TYPE }}
           image = linode/ubuntu22.04
           authorized_users = 
           EOF
           
-          # Create the server
-          RESULT=$(linode-cli linodes create \
-            --label "ats-server" \
-            --region "${{ env.TARGET_REGION }}" \
-            --type "${{ env.SERVER_TYPE }}" \
-            --image "linode/ubuntu22.04" \
-            --root_pass "$ATS_ROOT_PASSWORD" \
-            --json)
+          # Set LINODE_CLI_TOKEN environment variable to avoid interactive prompts
+          export LINODE_CLI_TOKEN="$LINODE_TOKEN"
           
-          SERVER_IP=$(echo "$RESULT" | jq -r '.[0].ipv4[0]')
+          # Create the server using API directly to avoid CLI configuration issues
+          echo "🔨 Creating server via Linode API..."
+          RESULT=$(curl -H "Authorization: Bearer $LINODE_TOKEN" \
+            -H "Content-Type: application/json" \
+            -X POST "https://api.linode.com/v4/linode/instances" \
+            -d "{
+              \"label\": \"ats-server\",
+              \"region\": \"${{ env.TARGET_REGION }}\",
+              \"type\": \"${{ env.SERVER_TYPE }}\",
+              \"image\": \"linode/ubuntu22.04\",
+              \"root_pass\": \"$ATS_ROOT_PASSWORD\",
+              \"booted\": true
+            }")
+          
+          echo "API Response: $RESULT"
+          
+          # Extract server IP
+          SERVER_IP=$(echo "$RESULT" | jq -r '.ipv4[0]')
+          if [[ "$SERVER_IP" == "null" || -z "$SERVER_IP" ]]; then
+            echo "❌ Failed to create server or extract IP"
+            echo "API Response: $RESULT"
+            exit 1
+          fi
+          
           echo "✅ Server created with IP: $SERVER_IP"
           echo "ip=$SERVER_IP" >> $GITHUB_OUTPUT
           
