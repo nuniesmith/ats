@@ -56,7 +56,7 @@ env:
   DOMAIN_NAME: ats.7gram.xyz
   NODE_VERSION: '18'
   DOCKER_REPO: nuniesmith/ats
-  TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+  TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
 
 jobs:
   # ============================================================================
@@ -297,7 +297,7 @@ jobs:
         env:
           SERVER_IP: ${{ steps.create.outputs.ip }}
           ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
           echo "🔧 Stage 1: Initial Arch Linux setup..."
           
@@ -335,8 +335,8 @@ jobs:
           sleep 5
           
           # Authenticate with Tailscale (using authkey from environment)
-          if [ -n "$TAILSCALE_AUTHKEY" ]; then
-            tailscale up --authkey="$TAILSCALE_AUTHKEY" --accept-routes
+          if [ -n "$TAILSCALE_AUTH_KEY" ]; then
+            tailscale up --authkey="$TAILSCALE_AUTH_KEY" --accept-routes
             echo "✅ Tailscale authentication completed"
           else
             echo "⚠️ No Tailscale authkey provided, skipping Tailscale setup"
@@ -387,7 +387,7 @@ jobs:
           
           [Service]
           Type=oneshot
-          Environment=TAILSCALE_AUTHKEY=$TAILSCALE_AUTHKEY
+          Environment=TAILSCALE_AUTH_KEY=$TAILSCALE_AUTH_KEY
           ExecStart=/opt/ats-stage2-deploy.sh
           RemainAfterExit=yes
           StandardOutput=journal
@@ -405,9 +405,9 @@ jobs:
           EOF
           
           # Set Tailscale authkey in the service environment
-          if [[ -n "$TAILSCALE_AUTHKEY" ]]; then
+          if [[ -n "$TAILSCALE_AUTH_KEY" ]]; then
             sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-              "sed -i 's/\$TAILSCALE_AUTHKEY/$TAILSCALE_AUTHKEY/' /etc/systemd/system/ats-stage2.service"
+              "sed -i 's/\$TAILSCALE_AUTH_KEY/$TAILSCALE_AUTH_KEY/' /etc/systemd/system/ats-stage2.service"
           fi
           
           # Reload systemd and reboot
