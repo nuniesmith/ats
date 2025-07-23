@@ -358,7 +358,7 @@ jobs:
           ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
           NETDATA_CLAIM_TOKEN: ${{ secrets.NETDATA_CLAIM_TOKEN }}
-          NETDATA_CLAIM_ROOMS: ${{ secrets.NETDATA_CLAIM_ROOMS }}
+          NETDATA_CLAIM_ROOM: ${{ secrets.NETDATA_CLAIM_ROOM }}
         run: |
           echo "🔧 Stage 1: Initial Arch Linux setup..."
           
@@ -373,8 +373,21 @@ jobs:
           done
           
           # Stage 1: System setup and stage 2 service creation
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-            "export NETDATA_CLAIM_TOKEN='$NETDATA_CLAIM_TOKEN' && export NETDATA_CLAIM_ROOMS='$NETDATA_CLAIM_ROOMS'" << 'EOF'
+          echo "🔧 Setting up environment variables for SSH session..."
+          NETDATA_TOKEN_ENV=""
+          NETDATA_ROOMS_ENV=""
+          
+          if [[ -n "$NETDATA_CLAIM_TOKEN" ]]; then
+            NETDATA_TOKEN_ENV="export NETDATA_CLAIM_TOKEN='$NETDATA_CLAIM_TOKEN';"
+          fi
+          
+          if [[ -n "$NETDATA_CLAIM_ROOM" ]]; then
+            NETDATA_ROOMS_ENV="export NETDATA_CLAIM_ROOM='$NETDATA_CLAIM_ROOM';"
+          fi
+          
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP << EOF
+            $NETDATA_TOKEN_ENV
+            $NETDATA_ROOMS_ENV
             echo "🔧 Stage 1: System initialization..."
             
             # Update system
@@ -397,11 +410,11 @@ jobs:
               echo "✅ Netdata installed via pacman"
             else
               echo "Installing Netdata manually via kickstart script..."
-              curl -fsSL https://get.netdata.cloud/kickstart.sh | sh -s -- --stable-channel --disable-telemetry --claim-token="${NETDATA_CLAIM_TOKEN:-}" --claim-rooms="${NETDATA_CLAIM_ROOMS:-}" --claim-url="https://app.netdata.cloud"
+              curl -fsSL https://get.netdata.cloud/kickstart.sh | sh -s -- --stable-channel --disable-telemetry --claim-token="${NETDATA_CLAIM_TOKEN:-}" --claim-rooms="${NETDATA_CLAIM_ROOM:-}" --claim-url="https://app.netdata.cloud"
             fi
             
             # Configure Netdata for cloud access if tokens are provided
-            if [[ -n "${NETDATA_CLAIM_TOKEN:-}" && -n "${NETDATA_CLAIM_ROOMS:-}" ]]; then
+            if [[ -n "${NETDATA_CLAIM_TOKEN:-}" && -n "${NETDATA_CLAIM_ROOM:-}" ]]; then
               echo "🔗 Configuring Netdata cloud integration..."
               # Create netdata cloud configuration
               mkdir -p /etc/netdata
@@ -436,7 +449,7 @@ jobs:
               
               # Claim the node to Netdata Cloud
               if command -v netdata-claim.sh >/dev/null 2>&1; then
-                netdata-claim.sh -token="${NETDATA_CLAIM_TOKEN}" -rooms="${NETDATA_CLAIM_ROOMS}" -url="https://app.netdata.cloud"
+                netdata-claim.sh -token="${NETDATA_CLAIM_TOKEN}" -rooms="${NETDATA_CLAIM_ROOM}" -url="https://app.netdata.cloud"
                 echo "✅ Netdata claimed to cloud"
               else
                 echo "⚠️ Netdata claim script not found, will retry in Stage 2"
@@ -481,7 +494,7 @@ jobs:
             systemctl enable netdata
             
             # Create stage 2 deployment script
-            cat > /opt/ats-stage2-deploy.sh << 'STAGE2EOF'
+            cat > /opt/ats-stage2-deploy.sh << 'STAGE2_SCRIPT'
           #!/bin/bash
           echo "🚀 Stage 2: Post-reboot deployment with Tailscale..."
           
@@ -490,8 +503,8 @@ jobs:
           sleep 5
           
           # Authenticate with Tailscale (using authkey from environment)
-          if [ -n "$TAILSCALE_AUTH_KEY" ]; then
-            tailscale up --authkey="$TAILSCALE_AUTH_KEY" --accept-routes --hostname=ats
+          if [ -n "\$TAILSCALE_AUTH_KEY" ]; then
+            tailscale up --authkey="\$TAILSCALE_AUTH_KEY" --accept-routes --hostname=ats
             echo "✅ Tailscale authentication completed with hostname 'ats'"
           else
             echo "⚠️ No Tailscale authkey provided, skipping Tailscale setup"
@@ -514,10 +527,10 @@ jobs:
               DOCKER_READY=true
               break
             fi
-            echo "⏳ Waiting for Docker daemon... (attempt $i/30)"
+            echo "⏳ Waiting for Docker daemon... (attempt \$i/30)"
             
             # Try to restart Docker if it's taking too long
-            if [ $i -eq 15 ]; then
+            if [ \$i -eq 15 ]; then
               echo "🔄 Restarting Docker service..."
               systemctl restart docker
               sleep 5
@@ -526,7 +539,7 @@ jobs:
             sleep 3
           done
           
-          if [ "$DOCKER_READY" != "true" ]; then
+          if [ "\$DOCKER_READY" != "true" ]; then
             echo "❌ Docker failed to start in Stage 2"
             systemctl status docker --no-pager || echo "Docker service status unavailable"
             journalctl -u docker --no-pager -n 10 || echo "Docker logs unavailable"
@@ -546,12 +559,12 @@ jobs:
           systemctl start netdata
           
           # Retry cloud claiming if not done in Stage 1
-          if [[ -n "$NETDATA_CLAIM_TOKEN" && -n "$NETDATA_CLAIM_ROOMS" ]]; then
+          if [[ -n "\$NETDATA_CLAIM_TOKEN" && -n "\$NETDATA_CLAIM_ROOM" ]]; then
             echo "🔗 Attempting Netdata cloud claim..."
             if command -v netdata-claim.sh >/dev/null 2>&1; then
-              netdata-claim.sh -token="$NETDATA_CLAIM_TOKEN" -rooms="$NETDATA_CLAIM_ROOMS" -url="https://app.netdata.cloud" || echo "⚠️ Netdata cloud claim failed, check tokens"
+              netdata-claim.sh -token="\$NETDATA_CLAIM_TOKEN" -rooms="\$NETDATA_CLAIM_ROOM" -url="https://app.netdata.cloud" || echo "⚠️ Netdata cloud claim failed, check tokens"
             elif [[ -f /usr/libexec/netdata/netdata-claim.sh ]]; then
-              /usr/libexec/netdata/netdata-claim.sh -token="$NETDATA_CLAIM_TOKEN" -rooms="$NETDATA_CLAIM_ROOMS" -url="https://app.netdata.cloud" || echo "⚠️ Netdata cloud claim failed, check tokens"
+              /usr/libexec/netdata/netdata-claim.sh -token="\$NETDATA_CLAIM_TOKEN" -rooms="\$NETDATA_CLAIM_ROOM" -url="https://app.netdata.cloud" || echo "⚠️ Netdata cloud claim failed, check tokens"
             else
               echo "⚠️ Netdata claim script not found"
             fi
@@ -564,7 +577,7 @@ jobs:
           echo "✅ Netdata monitoring started on port 19999"
           echo "🌐 Netdata will be available at: http://\$(hostname -I 2>/dev/null | awk '{print \$1}' || ip route get 1 | awk '{print \$7; exit}'):19999"
           
-          if [[ -n "$NETDATA_CLAIM_TOKEN" ]]; then
+          if [[ -n "\$NETDATA_CLAIM_TOKEN" ]]; then
             echo "☁️ Netdata cloud integration configured - check https://app.netdata.cloud"
           fi
           
@@ -599,12 +612,12 @@ jobs:
           
           # Signal completion
           touch /opt/stage2-complete
-          STAGE2EOF
+          STAGE2_SCRIPT
             
             chmod +x /opt/ats-stage2-deploy.sh
             
             # Create systemd service for stage 2
-            cat > /etc/systemd/system/ats-stage2.service << 'SERVICEEOF'
+            cat > /etc/systemd/system/ats-stage2.service << 'SERVICE_FILE'
           [Unit]
           Description=ATS Stage 2 Deployment
           After=network.target
@@ -612,9 +625,9 @@ jobs:
           
           [Service]
           Type=oneshot
-          Environment=TAILSCALE_AUTH_KEY=$TAILSCALE_AUTH_KEY
-          Environment=NETDATA_CLAIM_TOKEN=$NETDATA_CLAIM_TOKEN
-          Environment=NETDATA_CLAIM_ROOMS=$NETDATA_CLAIM_ROOMS
+          Environment=TAILSCALE_AUTH_KEY=\$TAILSCALE_AUTH_KEY
+          Environment=NETDATA_CLAIM_TOKEN=\$NETDATA_CLAIM_TOKEN
+          Environment=NETDATA_CLAIM_ROOM=\$NETDATA_CLAIM_ROOM
           ExecStart=/opt/ats-stage2-deploy.sh
           RemainAfterExit=yes
           StandardOutput=journal
@@ -622,7 +635,7 @@ jobs:
           
           [Install]
           WantedBy=multi-user.target
-          SERVICEEOF
+          SERVICE_FILE
             
             # Enable stage 2 service
             systemctl enable ats-stage2.service
@@ -634,18 +647,18 @@ jobs:
           # Set Tailscale authkey in the service environment
           if [[ -n "$TAILSCALE_AUTH_KEY" ]]; then
             sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-              "sed -i 's/\$TAILSCALE_AUTH_KEY/$TAILSCALE_AUTH_KEY/' /etc/systemd/system/ats-stage2.service"
+              "if [ -f /etc/systemd/system/ats-stage2.service ]; then sed -i 's/\\\\$TAILSCALE_AUTH_KEY/$TAILSCALE_AUTH_KEY/' /etc/systemd/system/ats-stage2.service; else echo 'Service file not found for Tailscale authkey update'; fi"
           fi
           
           # Set Netdata environment variables in the service
           if [[ -n "$NETDATA_CLAIM_TOKEN" ]]; then
             sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-              "sed -i 's/\$NETDATA_CLAIM_TOKEN/$NETDATA_CLAIM_TOKEN/' /etc/systemd/system/ats-stage2.service"
+              "if [ -f /etc/systemd/system/ats-stage2.service ]; then sed -i 's/\\\\$NETDATA_CLAIM_TOKEN/$NETDATA_CLAIM_TOKEN/' /etc/systemd/system/ats-stage2.service; else echo 'Service file not found for Netdata token update'; fi"
           fi
           
-          if [[ -n "$NETDATA_CLAIM_ROOMS" ]]; then
+          if [[ -n "$NETDATA_CLAIM_ROOM" ]]; then
             sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-              "sed -i 's/\$NETDATA_CLAIM_ROOMS/$NETDATA_CLAIM_ROOMS/' /etc/systemd/system/ats-stage2.service"
+              "if [ -f /etc/systemd/system/ats-stage2.service ]; then sed -i 's/\\\\$NETDATA_CLAIM_ROOM/$NETDATA_CLAIM_ROOM/' /etc/systemd/system/ats-stage2.service; else echo 'Service file not found for Netdata rooms update'; fi"
           fi
           
           # Reload systemd and reboot
@@ -1339,3 +1352,59 @@ jobs:
           else
             echo "ℹ️ Discord webhook not configured, skipping notification"
           fi
+
+  # ============================================================================
+  # Cleanup Failed Deployments
+  # ============================================================================
+  cleanup-failed-deployment:
+    name: 🧹 Cleanup Failed Deployment
+    runs-on: ubuntu-latest
+    needs: [create-server, deploy-to-server]
+    if: |
+      always() && 
+      (needs.create-server.result == 'failure' || 
+       (needs.create-server.result == 'success' && needs.deploy-to-server.result == 'failure'))
+    steps:
+      - name: 🧹 Cleanup Failed Server
+        env:
+          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+        run: |
+          echo "🧹 Cleaning up failed deployment..."
+          
+          if [[ -n "$LINODE_TOKEN" ]]; then
+            # Get the server ID for cleanup
+            if [[ "${{ needs.create-server.result }}" == "success" ]]; then
+              SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
+              echo "🔍 Looking for server with IP: $SERVER_IP"
+              
+              # Find server by IP and delete it
+              SERVERS_RESPONSE=$(curl -s -H "Authorization: Bearer $LINODE_TOKEN" \
+                "https://api.linode.com/v4/linode/instances")
+              
+              SERVER_ID=$(echo "$SERVERS_RESPONSE" | jq -r ".data[] | select(.ipv4[]? == \"$SERVER_IP\") | .id")
+              
+              if [[ -n "$SERVER_ID" && "$SERVER_ID" != "null" ]]; then
+                echo "🗑️ Deleting failed server (ID: $SERVER_ID, IP: $SERVER_IP)..."
+                
+                DELETE_RESPONSE=$(curl -s -X DELETE \
+                  -H "Authorization: Bearer $LINODE_TOKEN" \
+                  "https://api.linode.com/v4/linode/instances/$SERVER_ID")
+                
+                if [[ $? -eq 0 ]]; then
+                  echo "✅ Server cleanup completed"
+                  echo "💰 Server costs stopped - no charges for failed deployment"
+                else
+                  echo "❌ Failed to delete server - please manually cleanup server ID: $SERVER_ID"
+                  echo "🔗 Manual cleanup: https://cloud.linode.com/linodes/$SERVER_ID"
+                fi
+              else
+                echo "⚠️ Could not find server to cleanup"
+              fi
+            else
+              echo "ℹ️ No server was created, nothing to cleanup"
+            fi
+          else
+            echo "⚠️ No Linode token available for cleanup"
+          fi
+          
+          echo "🔔 Deployment failed - check logs above for details"
