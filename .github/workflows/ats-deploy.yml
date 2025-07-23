@@ -378,6 +378,16 @@ jobs:
             # Install essential packages
             pacman -S --noconfirm curl wget git unzip nginx docker docker-compose tailscale netdata
             
+            # Verify docker installation and enable service immediately
+            if systemctl list-unit-files | grep -q docker.service; then
+              echo "✅ Docker service found, enabling..."
+              systemctl enable docker
+            else
+              echo "❌ Docker service not found after installation"
+              pacman -S --noconfirm docker
+              systemctl enable docker
+            fi
+            
             # Verify docker-compose installation
             if ! command -v docker-compose >/dev/null 2>&1; then
               echo "Installing docker-compose via pip as fallback..."
@@ -416,15 +426,33 @@ jobs:
           systemctl start docker
           systemctl enable docker
           
-          # Wait for Docker to be ready
-          for i in {1..20}; do
+          # Wait for Docker to be ready with error handling
+          DOCKER_READY=false
+          for i in {1..30}; do
             if docker info >/dev/null 2>&1; then
               echo "✅ Docker daemon is ready"
+              DOCKER_READY=true
               break
             fi
-            echo "⏳ Waiting for Docker daemon... (attempt $i/20)"
+            echo "⏳ Waiting for Docker daemon... (attempt $i/30)"
+            
+            # Try to restart Docker if it's taking too long
+            if [ $i -eq 15 ]; then
+              echo "🔄 Restarting Docker service..."
+              systemctl restart docker
+              sleep 5
+            fi
+            
             sleep 3
           done
+          
+          if [ "$DOCKER_READY" != "true" ]; then
+            echo "❌ Docker failed to start in Stage 2"
+            systemctl status docker --no-pager || echo "Docker service status unavailable"
+            journalctl -u docker --no-pager -n 10 || echo "Docker logs unavailable"
+          else
+            echo "✅ Docker successfully started in Stage 2"
+          fi
           
           # Verify docker-compose is available
           if ! command -v docker-compose >/dev/null 2>&1; then
@@ -653,7 +681,53 @@ jobs:
           fi
           echo "server-ip=$SERVER_IP" >> $GITHUB_OUTPUT
 
-      - name: 📦 Deploy Docker Stack
+      - name: � Verify Server Readiness
+        env:
+          SERVER_IP: ${{ steps.target.outputs.server-ip }}
+          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
+        run: |
+          echo "🔍 Verifying server readiness before deployment..."
+          
+          # Check if Stage 2 completed (for new servers)
+          if [[ "${{ needs.create-server.result }}" == "success" ]]; then
+            echo "📋 Checking Stage 2 completion status..."
+            STAGE2_STATUS=$(sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
+              if [ -f /opt/stage2-complete ]; then
+                echo 'completed'
+              else
+                echo 'incomplete'
+              fi
+            ")
+            
+            if [[ "$STAGE2_STATUS" == "completed" ]]; then
+              echo "✅ Stage 2 completed successfully"
+            else
+              echo "⚠️ Stage 2 may not have completed properly"
+              echo "📊 Checking system status:"
+              
+              sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
+                echo 'System uptime:'
+                uptime
+                echo 'Available services:'
+                systemctl list-units --type=service --state=active | grep -E 'docker|tailscale|netdata' || echo 'No matching services found'
+                echo 'Docker status:'
+                systemctl status docker --no-pager || echo 'Docker service not found'
+              "
+            fi
+          fi
+          
+          # Verify basic connectivity and system status
+          echo "🌐 Checking server connectivity and basic status..."
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
+            echo 'Hostname: \$(hostname)'
+            echo 'System: \$(uname -a)'
+            echo 'Available disk space:'
+            df -h /
+            echo 'Memory usage:'
+            free -h
+          "
+
+      - name: �📦 Deploy Docker Stack
         env:
           SERVER_IP: ${{ steps.target.outputs.server-ip }}
           WEB_IMAGE: ${{ needs.build-docker-images.outputs.web-image }}
@@ -692,20 +766,49 @@ jobs:
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
             cd /opt/ats
             
+            # Ensure Docker is properly installed and configured
+            echo '🔧 Checking Docker installation...'
+            if ! command -v docker >/dev/null 2>&1; then
+              echo 'Docker not found, installing...'
+              pacman -Syu --noconfirm
+              pacman -S --noconfirm docker docker-compose
+            fi
+            
             # Ensure Docker daemon is running
             echo 'Starting Docker daemon...'
             systemctl start docker
             systemctl enable docker
             
-            # Wait for Docker daemon to be ready
+            # Wait for Docker daemon to be ready with better error handling
+            DOCKER_READY=false
             for i in {1..30}; do
               if docker info >/dev/null 2>&1; then
                 echo 'Docker daemon is ready'
+                DOCKER_READY=true
                 break
               fi
               echo \"Waiting for Docker daemon... (attempt \$i/30)\"
+              
+              # Try to restart Docker service if it's not responding
+              if [ \$i -eq 10 ] || [ \$i -eq 20 ]; then
+                echo 'Restarting Docker service...'
+                systemctl stop docker 2>/dev/null || true
+                sleep 2
+                systemctl start docker
+                sleep 5
+              fi
+              
               sleep 3
             done
+            
+            if [ \"\$DOCKER_READY\" != \"true\" ]; then
+              echo '❌ Docker daemon failed to start after 30 attempts'
+              echo 'Checking Docker service status:'
+              systemctl status docker --no-pager || true
+              echo 'Checking Docker logs:'
+              journalctl -u docker --no-pager -n 20 || true
+              exit 1
+            fi
             
             # Check if docker-compose is available, install if not
             if ! command -v docker-compose >/dev/null 2>&1; then
@@ -714,6 +817,7 @@ jobs:
             fi
             
             # Verify Docker is working
+            echo '🔍 Verifying Docker installation:'
             docker version
             docker-compose version
             
@@ -725,7 +829,10 @@ jobs:
             docker-compose up -d
             
             # Show container status
+            echo '📊 Container status:'
             docker-compose ps
+            
+            echo '📝 Recent container logs:'
             docker-compose logs --tail=20
             
             # Wait for health checks
