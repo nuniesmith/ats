@@ -58,11 +58,83 @@ env:
 
 jobs:
   # ============================================================================
+  # Detect File Changes
+  # ============================================================================
+  detect-changes:
+    name: 🔍 Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      web-changed: ${{ steps.changes.outputs.web }}
+      api-changed: ${{ steps.changes.outputs.api }}
+      docker-changed: ${{ steps.changes.outputs.docker }}
+      workflow-changed: ${{ steps.changes.outputs.workflow }}
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: 🔍 Check for file changes
+        id: changes
+        run: |
+          # Check if this is a manual trigger or first push
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "Manual trigger - building all"
+            echo "web=true" >> $GITHUB_OUTPUT
+            echo "api=true" >> $GITHUB_OUTPUT
+            echo "docker=true" >> $GITHUB_OUTPUT
+            echo "workflow=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Get changed files
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          echo "Changed files: $CHANGED_FILES"
+          
+          # Check for web changes
+          if echo "$CHANGED_FILES" | grep -E '^src/web/|^package.*\.json$' >/dev/null 2>&1; then
+            echo "web=true" >> $GITHUB_OUTPUT
+            echo "📦 Web app changes detected"
+          else
+            echo "web=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check for API changes
+          if echo "$CHANGED_FILES" | grep -E '^src/api/|^package.*\.json$' >/dev/null 2>&1; then
+            echo "api=true" >> $GITHUB_OUTPUT
+            echo "🔧 API changes detected"
+          else
+            echo "api=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check for Docker/deployment changes
+          if echo "$CHANGED_FILES" | grep -E '^docker-compose|Dockerfile|\.dockerignore' >/dev/null 2>&1; then
+            echo "docker=true" >> $GITHUB_OUTPUT
+            echo "🐳 Docker changes detected"
+          else
+            echo "docker=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check for workflow changes
+          if echo "$CHANGED_FILES" | grep -E '^\.github/workflows/' >/dev/null 2>&1; then
+            echo "workflow=true" >> $GITHUB_OUTPUT
+            echo "⚙️ Workflow changes detected"
+          else
+            echo "workflow=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # If any changes detected, enable docker builds
+          if [[ "$(echo "$CHANGED_FILES" | grep -E '^src/|Dockerfile|docker-compose|\.github/workflows/' | wc -l)" -gt 0 ]]; then
+            echo "docker=true" >> $GITHUB_OUTPUT
+          fi
+
+  # ============================================================================
   # Infrastructure Check & Setup
   # ============================================================================
   infrastructure-check:
     name: 🏗️ Infrastructure Check
     runs-on: ubuntu-latest
+    needs: detect-changes
     outputs:
       server-exists: ${{ steps.check-server.outputs.exists }}
       server-ip: ${{ steps.check-server.outputs.ip }}
@@ -78,6 +150,15 @@ jobs:
           LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
         run: |
           echo "🔍 Checking for existing ATS servers..."
+          
+          # Skip if no Linode token provided
+          if [[ -z "$LINODE_TOKEN" ]]; then
+            echo "⚠️ No Linode token provided - skipping server check"
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "ip=" >> $GITHUB_OUTPUT
+            echo "status=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           
           # Install Linode CLI
           pip3 install linode-cli
@@ -121,6 +202,9 @@ jobs:
           
           SERVER_EXISTS="${{ steps.check-server.outputs.exists }}"
           CREATE_NEW="${{ env.CREATE_NEW_SERVER }}"
+          
+          echo "Server exists: $SERVER_EXISTS"
+          echo "Create new requested: $CREATE_NEW"
           
           if [[ "$SERVER_EXISTS" == "true" ]]; then
             echo "✅ Server exists - will use existing server"
@@ -234,7 +318,13 @@ jobs:
   build-docker-images:
     name: 🐳 Build & Push Docker Images
     runs-on: ubuntu-latest
-    if: contains(fromJson('["docker-only", "full-deploy", "web-only"]'), github.event.inputs.deployment_mode || 'docker-only')
+    needs: detect-changes
+    if: |
+      (contains(fromJson('["docker-only", "full-deploy", "web-only"]'), github.event.inputs.deployment_mode || 'docker-only') &&
+       (needs.detect-changes.outputs.docker-changed == 'true' || 
+        needs.detect-changes.outputs.web-changed == 'true' || 
+        needs.detect-changes.outputs.api-changed == 'true' ||
+        github.event_name == 'workflow_dispatch'))
     outputs:
       web-image: ${{ steps.meta.outputs.web-image }}
       api-image: ${{ steps.meta.outputs.api-image }}
@@ -274,6 +364,7 @@ jobs:
           echo "  API: ${API_IMAGE}"
 
       - name: 🏗️ Build and Push React Web App
+        if: needs.detect-changes.outputs.web-changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v5
         with:
           context: ./src/web
@@ -288,6 +379,7 @@ jobs:
             VITE_SOCKET_URL=http://localhost
 
       - name: 🏗️ Build and Push API Server
+        if: needs.detect-changes.outputs.api-changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: docker/build-push-action@v5
         with:
           context: ./src/api
@@ -304,12 +396,12 @@ jobs:
   deploy-to-server:
     name: 🚀 Deploy to ATS Server
     runs-on: ubuntu-latest
-    needs: [infrastructure-check, build-docker-images, create-server]
+    needs: [infrastructure-check, build-docker-images, create-server, detect-changes]
     if: |
       always() && 
       (needs.infrastructure-check.outputs.server-exists == 'true' || needs.create-server.result == 'success') &&
       contains(fromJson('["docker-only", "full-deploy", "web-only"]'), github.event.inputs.deployment_mode || 'docker-only') &&
-      needs.build-docker-images.result == 'success'
+      (needs.build-docker-images.result == 'success' || needs.build-docker-images.result == 'skipped')
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
@@ -334,6 +426,9 @@ jobs:
           ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
         run: |
           echo "🚀 Deploying to server: $SERVER_IP"
+          echo "🐳 Using images:"
+          echo "   Web: ${WEB_IMAGE:-nuniesmith/ats:web-latest}"
+          echo "   API: ${API_IMAGE:-nuniesmith/ats:api-latest}"
           
           # Create deployment directory
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "mkdir -p /opt/ats"
@@ -348,8 +443,8 @@ jobs:
           DOMAIN_NAME=${{ env.DOMAIN_NAME }}
           ATS_DEFAULT_PASSWORD=${{ secrets.ATS_DEFAULT_PASSWORD }}
           STEAM_COLLECTION_ID=3530633316
-          WEB_IMAGE=$WEB_IMAGE
-          API_IMAGE=$API_IMAGE
+          WEB_IMAGE=${WEB_IMAGE:-nuniesmith/ats:web-latest}
+          API_IMAGE=${API_IMAGE:-nuniesmith/ats:api-latest}
           CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID=${{ secrets.CLOUDFLARE_ZONE_ID }}
           DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
@@ -406,7 +501,7 @@ jobs:
   deployment-summary:
     name: 📋 Deployment Summary
     runs-on: ubuntu-latest
-    needs: [infrastructure-check, build-docker-images, deploy-to-server, create-server]
+    needs: [infrastructure-check, build-docker-images, deploy-to-server, create-server, detect-changes]
     if: always()
     steps:
       - name: 📋 Generate Summary
@@ -447,15 +542,15 @@ jobs:
           fi
           
           curl -H "Content-Type: application/json" \
-            -d '{
-              "embeds": [{
-                "title": "🚀 ATS Server Deployment",
-                "description": "Deployment Status: '$STATUS'",
-                "color": 3066993,
-                "fields": [
-                  {"name": "Domain", "value": "${{ env.DOMAIN_NAME }}", "inline": true},
-                  {"name": "Commit", "value": "${{ github.sha }}", "inline": true}
+            -d "{
+              \"embeds\": [{
+                \"title\": \"🚀 ATS Server Deployment\",
+                \"description\": \"Deployment Status: $STATUS\",
+                \"color\": 3066993,
+                \"fields\": [
+                  {\"name\": \"Domain\", \"value\": \"${{ env.DOMAIN_NAME }}\", \"inline\": true},
+                  {\"name\": \"Commit\", \"value\": \"${{ github.sha }}\", \"inline\": true}
                 ]
               }]
-            }' \
+            }" \
             "${{ secrets.DISCORD_WEBHOOK_URL }}"
