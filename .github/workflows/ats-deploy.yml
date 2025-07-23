@@ -30,10 +30,11 @@ on:
         required: false
         type: choice
         options:
-          - 'g6-standard-2'        # 2GB RAM, 1 CPU (recommended for ATS)
-          - 'g6-standard-4'        # 4GB RAM, 2 CPU (for multiple servers)
-          - 'g6-standard-8'        # 8GB RAM, 4 CPU (for heavy mod loads)
-        default: 'g6-standard-4'
+          - 'g6-standard-1'        # 2GB RAM, 1 CPU (recommended for ATS)
+          - 'g6-standard-2'        # 4GB RAM, 1 CPU 
+          - 'g6-standard-4'        # 8GB RAM, 2 CPU (for multiple servers)
+          - 'g6-standard-8'        # 16GB RAM, 4 CPU (for heavy mod loads)
+        default: 'g6-standard-1'
       
       target_region:
         description: 'Linode region for server'
@@ -50,11 +51,12 @@ on:
 env:
   DEPLOYMENT_MODE: ${{ github.event.inputs.deployment_mode || 'docker-only' }}
   CREATE_NEW_SERVER: ${{ github.event.inputs.create_new_server || 'true' }}
-  SERVER_TYPE: ${{ github.event.inputs.server_type || 'g6-standard-4' }}
+  SERVER_TYPE: ${{ github.event.inputs.server_type || 'g6-standard-1' }}
   TARGET_REGION: ${{ github.event.inputs.target_region || 'ca-central' }}
   DOMAIN_NAME: ats.7gram.xyz
   NODE_VERSION: '18'
   DOCKER_REPO: nuniesmith/ats
+  TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
 
 jobs:
   # ============================================================================
@@ -253,7 +255,7 @@ jobs:
           token = $LINODE_TOKEN
           region = ${{ env.TARGET_REGION }}
           type = ${{ env.SERVER_TYPE }}
-          image = linode/ubuntu22.04
+          image = linode/arch
           authorized_users = 
           EOF
           
@@ -269,7 +271,7 @@ jobs:
               \"label\": \"ats-server\",
               \"region\": \"${{ env.TARGET_REGION }}\",
               \"type\": \"${{ env.SERVER_TYPE }}\",
-              \"image\": \"linode/ubuntu22.04\",
+              \"image\": \"linode/arch\",
               \"root_pass\": \"$ATS_ROOT_PASSWORD\",
               \"booted\": true
             }")
@@ -291,12 +293,13 @@ jobs:
           echo "⏳ Waiting for server to boot..."
           sleep 120
 
-      - name: 🔧 Initial Server Setup
+      - name: 🔧 Stage 1 - Initial Server Setup
         env:
           SERVER_IP: ${{ steps.create.outputs.ip }}
           ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
         run: |
-          echo "🔧 Setting up server basics..."
+          echo "🔧 Stage 1: Initial Arch Linux setup..."
           
           # Wait for SSH to be available
           for i in {1..10}; do
@@ -308,29 +311,141 @@ jobs:
             sleep 30
           done
           
-          # Basic server setup
+          # Stage 1: System setup and stage 2 service creation
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
+            echo "🔧 Stage 1: System initialization..."
+            
             # Update system
-            apt update && apt upgrade -y
+            pacman -Syu --noconfirm
             
             # Install essential packages
-            apt install -y curl wget git unzip nginx
+            pacman -S --noconfirm curl wget git unzip nginx docker docker-compose tailscale
             
-            # Install Docker
-            curl -fsSL https://get.docker.com -o get-docker.sh
-            sh get-docker.sh
+            # Enable essential services
             systemctl enable docker
-            systemctl start docker
+            systemctl enable tailscaled
             
-            # Install Docker Compose
-            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            chmod +x /usr/local/bin/docker-compose
-            
-            # Configure firewall
+            # Create stage 2 deployment script
+            cat > /opt/ats-stage2-deploy.sh << 'STAGE2EOF'
+          #!/bin/bash
+          echo "🚀 Stage 2: Post-reboot deployment with Tailscale..."
+          
+          # Start Tailscale and authenticate
+          systemctl start tailscaled
+          sleep 5
+          
+          # Authenticate with Tailscale (using authkey from environment)
+          if [ -n "$TAILSCALE_AUTHKEY" ]; then
+            tailscale up --authkey="$TAILSCALE_AUTHKEY" --accept-routes
+            echo "✅ Tailscale authentication completed"
+          else
+            echo "⚠️ No Tailscale authkey provided, skipping Tailscale setup"
+          fi
+          
+          # Start Docker
+          systemctl start docker
+          
+          # Configure firewall for Arch Linux
+          if command -v ufw >/dev/null 2>&1; then
             ufw allow ssh
             ufw allow http
             ufw allow https
             ufw --force enable
+          else
+            # Configure iptables for Arch
+            iptables -A INPUT -i lo -j ACCEPT
+            iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+            iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+            iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+            iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+            iptables -A INPUT -p tcp --dport 3001 -j ACCEPT
+            iptables -A INPUT -j DROP
+            
+            # Save iptables rules
+            mkdir -p /etc/iptables
+            iptables-save > /etc/iptables/iptables.rules
+            systemctl enable iptables
+          fi
+          
+          # Create deployment directory
+          mkdir -p /opt/ats
+          
+          echo "✅ Stage 2 setup completed - ready for deployment"
+          
+          # Signal completion
+          touch /opt/stage2-complete
+          STAGE2EOF
+            
+            chmod +x /opt/ats-stage2-deploy.sh
+            
+            # Create systemd service for stage 2
+            cat > /etc/systemd/system/ats-stage2.service << 'SERVICEEOF'
+          [Unit]
+          Description=ATS Stage 2 Deployment
+          After=network.target
+          Wants=network.target
+          
+          [Service]
+          Type=oneshot
+          Environment=TAILSCALE_AUTHKEY=$TAILSCALE_AUTHKEY
+          ExecStart=/opt/ats-stage2-deploy.sh
+          RemainAfterExit=yes
+          StandardOutput=journal
+          StandardError=journal
+          
+          [Install]
+          WantedBy=multi-user.target
+          SERVICEEOF
+            
+            # Enable stage 2 service
+            systemctl enable ats-stage2.service
+            
+            echo "✅ Stage 1 complete - systemd service created for stage 2"
+            echo "🔄 Preparing for reboot..."
+          EOF
+          
+          # Set Tailscale authkey in the service environment
+          if [[ -n "$TAILSCALE_AUTHKEY" ]]; then
+            sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
+              "sed -i 's/\$TAILSCALE_AUTHKEY/$TAILSCALE_AUTHKEY/' /etc/systemd/system/ats-stage2.service"
+          fi
+          
+          # Reload systemd and reboot
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
+            "systemctl daemon-reload && reboot" || true
+          
+          echo "🔄 Server rebooting for stage 2..."
+
+      - name: ⏳ Wait for Stage 2 Completion
+        env:
+          SERVER_IP: ${{ steps.create.outputs.ip }}
+          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
+        run: |
+          echo "⏳ Waiting for server reboot and stage 2 completion..."
+          
+          # Wait for reboot
+          sleep 60
+          
+          # Wait for SSH to come back up and stage 2 to complete
+          for i in {1..20}; do
+            if sshpass -p "$ATS_ROOT_PASSWORD" ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$SERVER_IP "test -f /opt/stage2-complete"; then
+              echo "✅ Stage 2 deployment completed successfully"
+              break
+            fi
+            echo "⏳ Waiting for stage 2 completion... (attempt $i/20)"
+            sleep 30
+          done
+          
+          # Verify services are running
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
+            echo "🔍 Verifying services..."
+            systemctl status docker --no-pager
+            systemctl status tailscaled --no-pager
+            
+            # Check Tailscale status
+            tailscale status || echo "⚠️ Tailscale not connected"
+            
+            echo "✅ Two-stage deployment completed"
           EOF
 
   # ============================================================================
