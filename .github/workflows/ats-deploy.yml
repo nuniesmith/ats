@@ -375,8 +375,28 @@ jobs:
             # Update system
             pacman -Syu --noconfirm
             
-            # Install essential packages
-            pacman -S --noconfirm curl wget git unzip nginx docker docker-compose tailscale netdata
+            # Install essential packages with verification
+            echo "📦 Installing essential packages..."
+            pacman -S --noconfirm curl wget git unzip nginx docker docker-compose
+            
+            # Install Tailscale
+            echo "📦 Installing Tailscale..."
+            pacman -S --noconfirm tailscale || {
+              echo "Installing Tailscale from AUR..."
+              curl -fsSL https://tailscale.com/install.sh | sh
+            }
+            
+            # Install Netdata
+            echo "📦 Installing Netdata..."
+            pacman -S --noconfirm netdata || {
+              echo "Installing Netdata manually..."
+              curl -fsSL https://get.netdata.cloud/kickstart.sh | sh -s -- --stable-channel --disable-telemetry
+            }
+            
+            # Configure system optimizations
+            echo "⚙️ Configuring system optimizations..."
+            echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf
+            sysctl vm.overcommit_memory=1
             
             # Verify docker installation and enable service immediately
             if systemctl list-unit-files | grep -q docker.service; then
@@ -562,14 +582,27 @@ jobs:
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
             echo "🔍 Verifying services..."
             systemctl status docker --no-pager
-            systemctl status tailscaled --no-pager
-            systemctl status netdata --no-pager
             
-            # Check Tailscale status
-            tailscale status || echo "⚠️ Tailscale not connected"
+            if systemctl list-unit-files | grep -q tailscaled.service; then
+              systemctl status tailscaled --no-pager
+              # Check Tailscale status
+              if command -v tailscale >/dev/null 2>&1; then
+                tailscale status || echo "⚠️ Tailscale not connected"
+              else
+                echo "⚠️ Tailscale command not found"
+              fi
+            else
+              echo "⚠️ Tailscale service not installed"
+            fi
+            
+            if systemctl list-unit-files | grep -q netdata.service; then
+              systemctl status netdata --no-pager
+            else
+              echo "⚠️ Netdata service not installed"
+            fi
             
             echo "✅ Two-stage deployment completed"
-            echo "📊 Netdata monitoring available at: http://$(hostname -I | awk '{print $1}'):19999"
+            echo "📊 Netdata monitoring available at: http://$(hostname -I 2>/dev/null | awk '{print $1}' || ip route get 1 | awk '{print $7; exit}'):19999"
           EOF
 
   # ============================================================================
@@ -725,6 +758,8 @@ jobs:
             df -h /
             echo 'Memory usage:'
             free -h
+            echo 'Network interfaces:'
+            ip addr show | grep -E 'inet [0-9]' | grep -v '127.0.0.1' | awk '{print \$2}' | head -3
           "
 
       - name: �📦 Deploy Docker Stack
@@ -834,6 +869,16 @@ jobs:
             
             echo '📝 Recent container logs:'
             docker-compose logs --tail=20
+            
+            # Test container connectivity
+            echo '🔗 Testing container network connectivity...'
+            if docker exec ats-web-app nslookup ats-api-server >/dev/null 2>&1; then
+              echo '✅ Web app can resolve API server'
+            else
+              echo '⚠️ Web app cannot resolve API server - checking network'
+              docker network ls
+              docker network inspect ats-network || docker network inspect ats_ats-network
+            fi
             
             # Wait for health checks
             echo 'Waiting for services to be healthy...'
