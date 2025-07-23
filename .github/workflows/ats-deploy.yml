@@ -918,6 +918,7 @@ jobs:
             echo "   Tailscale IP: $TAILSCALE_IP"
             echo "   Hostname: ats"
             echo "tailscale_ip=$TAILSCALE_IP" >> $GITHUB_ENV
+            echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
           else
             echo "⚠️ Tailscale not connected or authentication failed"
             echo "Attempting manual Tailscale authentication..."
@@ -931,18 +932,46 @@ jobs:
                 sleep 5
                 tailscale status
               "
+              
+              # Re-check Tailscale status after retry
+              echo "🔄 Re-checking Tailscale status after retry..."
+              TAILSCALE_STATUS_RETRY=$(sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "tailscale status --json 2>/dev/null || echo '{}'")
+              
+              if echo "$TAILSCALE_STATUS_RETRY" | jq -e '.Self.Online' >/dev/null 2>&1; then
+                TAILSCALE_IP=$(echo "$TAILSCALE_STATUS_RETRY" | jq -r '.Self.TailscaleIPs[0] // "unknown"')
+                echo "✅ Tailscale authentication successful after retry"
+                echo "   Tailscale IP: $TAILSCALE_IP"
+                echo "tailscale_ip=$TAILSCALE_IP" >> $GITHUB_ENV
+                echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+              else
+                echo "❌ Tailscale authentication failed after retry"
+                echo "TAILSCALE_IP=" >> $GITHUB_ENV
+              fi
+            else
+              echo "❌ No Tailscale auth key provided"
+              echo "TAILSCALE_IP=" >> $GITHUB_ENV
             fi
           fi
 
       - name: 🌐 Update Cloudflare DNS Records
         env:
           SERVER_IP: ${{ steps.target.outputs.server-ip }}
+          TAILSCALE_IP: ${{ env.TAILSCALE_IP }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           DOMAIN_NAME: ${{ env.DOMAIN_NAME }}
         run: |
           if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ZONE_ID" && -n "$DOMAIN_NAME" ]]; then
             echo "🌐 Updating Cloudflare DNS records for $DOMAIN_NAME..."
+            
+            # Determine which IP to use for DNS records
+            if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" && "$TAILSCALE_IP" != "" ]]; then
+              DNS_IP="$TAILSCALE_IP"
+              echo "🔗 Using Tailscale IP for DNS records: $DNS_IP"
+            else
+              DNS_IP="$SERVER_IP"
+              echo "⚠️ Tailscale IP not available, falling back to public IP: $DNS_IP"
+            fi
             
             # Function to update DNS record
             update_dns_record() {
@@ -986,19 +1015,30 @@ jobs:
               fi
             }
             
-            # Update main domain A record
-            update_dns_record "$DOMAIN_NAME" "$SERVER_IP" "A"
+            # Update main domain A record with Tailscale IP
+            update_dns_record "$DOMAIN_NAME" "$DNS_IP" "A"
             
-            # Update www subdomain
-            update_dns_record "www.$DOMAIN_NAME" "$SERVER_IP" "A"
+            # Update www subdomain with Tailscale IP
+            update_dns_record "www.$DOMAIN_NAME" "$DNS_IP" "A"
             
-            # Update API subdomain if needed
-            update_dns_record "api.$DOMAIN_NAME" "$SERVER_IP" "A"
+            # Update API subdomain with Tailscale IP
+            update_dns_record "api.$DOMAIN_NAME" "$DNS_IP" "A"
             
             echo "🌐 DNS update completed"
-            echo "   Main domain: https://$DOMAIN_NAME"
-            echo "   WWW: https://www.$DOMAIN_NAME"
-            echo "   API: https://api.$DOMAIN_NAME"
+            if [[ "$DNS_IP" == "$TAILSCALE_IP" ]]; then
+              echo "   🔗 All DNS records updated with Tailscale IP: $DNS_IP"
+              echo "   Main domain: https://$DOMAIN_NAME (Tailscale)"
+              echo "   WWW: https://www.$DOMAIN_NAME (Tailscale)"
+              echo "   API: https://api.$DOMAIN_NAME (Tailscale)"
+              echo ""
+              echo "   ℹ️ Note: These domains will only resolve within your Tailscale network"
+              echo "   🌍 Public access still available at: http://$SERVER_IP"
+            else
+              echo "   🌍 DNS records updated with public IP: $DNS_IP"
+              echo "   Main domain: https://$DOMAIN_NAME"
+              echo "   WWW: https://www.$DOMAIN_NAME"
+              echo "   API: https://api.$DOMAIN_NAME"
+            fi
             
             # Wait for DNS propagation
             echo "⏳ Waiting 30 seconds for DNS propagation..."
@@ -1053,15 +1093,21 @@ jobs:
             echo "✅ **Deployment Successful**" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "## 🌐 Access Points" >> $GITHUB_STEP_SUMMARY
-            echo "- **Web Interface**: http://${{ env.DOMAIN_NAME }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **API Server**: http://${{ env.DOMAIN_NAME }}:3001" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web Interface**: http://${{ env.DOMAIN_NAME }} (Tailscale network)" >> $GITHUB_STEP_SUMMARY
+            echo "- **API Server**: http://${{ env.DOMAIN_NAME }}:3001 (Tailscale network)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Direct Public Access**: http://${{ needs.infrastructure-check.outputs.server-ip || needs.create-server.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Netdata Monitoring**: http://${{ needs.infrastructure-check.outputs.server-ip || needs.create-server.outputs.server-ip }}:19999" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "## 🔗 Network Information" >> $GITHUB_STEP_SUMMARY
             echo "- **Public IP**: ${{ needs.infrastructure-check.outputs.server-ip || needs.create-server.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tailscale IP**: Used for DNS records (private network)" >> $GITHUB_STEP_SUMMARY
             echo "- **Hostname**: ats" >> $GITHUB_STEP_SUMMARY
-            echo "- **Tailscale**: Connected with hostname 'ats'" >> $GITHUB_STEP_SUMMARY
-            echo "- **DNS**: Updated for ${{ env.DOMAIN_NAME }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **DNS**: Updated for ${{ env.DOMAIN_NAME }} (points to Tailscale IP)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## ℹ️ **Important Notes**" >> $GITHUB_STEP_SUMMARY
+            echo "- Domain names resolve to Tailscale IP (private network only)" >> $GITHUB_STEP_SUMMARY
+            echo "- Use public IP for access outside Tailscale network" >> $GITHUB_STEP_SUMMARY
+            echo "- Tailscale provides secure private network access" >> $GITHUB_STEP_SUMMARY
           elif [[ "${{ needs.deploy-to-server.result }}" == "skipped" ]]; then
             echo "⚠️ **Deployment Skipped**: No server available" >> $GITHUB_STEP_SUMMARY
             echo "   - Create a server first by setting create_new_server=true" >> $GITHUB_STEP_SUMMARY
@@ -1116,7 +1162,7 @@ jobs:
                 },
                 {
                   "name": "🔗 Access Points",
-                  "value": "• [Web App](http://${{ env.DOMAIN_NAME }})\n• [API](http://${{ env.DOMAIN_NAME }}:3001)\n• [Monitoring](http://$SERVER_IP:19999)",
+                  "value": "• [Web App](http://${{ env.DOMAIN_NAME }}) (Tailscale)\n• [API](http://${{ env.DOMAIN_NAME }}:3001) (Tailscale)\n• [Public Access](http://$SERVER_IP)\n• [Monitoring](http://$SERVER_IP:19999)",
                   "inline": false
                 },
                 {
