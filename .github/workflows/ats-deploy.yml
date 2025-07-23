@@ -336,11 +336,16 @@ jobs:
           
           # Authenticate with Tailscale (using authkey from environment)
           if [ -n "$TAILSCALE_AUTH_KEY" ]; then
-            tailscale up --authkey="$TAILSCALE_AUTH_KEY" --accept-routes
-            echo "✅ Tailscale authentication completed"
+            tailscale up --authkey="$TAILSCALE_AUTH_KEY" --accept-routes --hostname=ats
+            echo "✅ Tailscale authentication completed with hostname 'ats'"
           else
             echo "⚠️ No Tailscale authkey provided, skipping Tailscale setup"
           fi
+          
+          # Set hostname to match domain
+          hostnamectl set-hostname ats
+          echo "127.0.0.1 ats ats.7gram.xyz" >> /etc/hosts
+          echo "✅ Hostname set to 'ats'"
           
           # Start Docker
           systemctl start docker
