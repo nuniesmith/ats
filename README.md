@@ -1,4 +1,4 @@
-# Freddy's ATS Server Manager v2.0
+# Freddy's ATS Server Manager v1.0.0
 
 ## Overview
 **🎉 NEW UNIFIED VERSION! 🎉**
@@ -72,7 +72,7 @@ ats/
 └── README.md                     # This file
 ```
 
-## 🏆 **Key Improvements in v2.0**
+## 🏆 **Key Improvements in v1.0.0**
 
 ### **🎯 Unified Experience**
 - **Single script** replaces 15+ individual batch files

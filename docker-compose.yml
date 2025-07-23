@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # React Web Application
+  ats-web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: ats-web-app
+    ports:
+      - "80:80"
+    environment:
+      - NODE_ENV=production
+    networks:
+      - ats-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Node.js API Server
+  ats-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: ats-api-server
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-change-this}
+      - FRONTEND_URL=http://localhost
+      - ATS_SERVER_PATH=/app/ats-server
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - CLOUDFLARE_ZONE_ID=${CLOUDFLARE_ZONE_ID}
+      - DOMAIN_NAME=${DOMAIN_NAME:-ats.7gram.xyz}
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+      - ATS_DEFAULT_PASSWORD=${ATS_DEFAULT_PASSWORD:-ruby}
+      - STEAM_COLLECTION_ID=${STEAM_COLLECTION_ID:-3530633316}
+    volumes:
+      - ats-data:/app/data
+      - ats-logs:/app/logs
+    networks:
+      - ats-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis for session storage (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: ats-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - ats-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: ats-nginx
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx-logs:/var/log/nginx
+    networks:
+      - ats-network
+    restart: unless-stopped
+    depends_on:
+      - ats-web
+      - ats-api
+
+networks:
+  ats-network:
+    driver: bridge
+
+volumes:
+  ats-data:
+    driver: local
+  ats-logs:
+    driver: local
+  redis-data:
+    driver: local
+  nginx-logs:
+    driver: local

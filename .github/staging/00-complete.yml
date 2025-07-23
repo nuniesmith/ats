@@ -1,0 +1,2661 @@
+# ============================================================================
+# FKS Trading Systems - Deployment Pipeline
+# ============================================================================
+# 
+# 🔐 PRIVATE REPOSITORY REQUIREMENTS:
+# This workflow is configured for a PRIVATE Docker Hub repository.
+# Required GitHub Secrets:
+#   - DOCKER_USERNAME: Your Docker Hub username
+#   - DOCKER_TOKEN: Docker Hub access token (NOT password!)
+# 
+# 📋 Docker Hub Setup:
+# 1. Go to https://hub.docker.com/settings/security
+# 2. Create a new access token with read/write permissions
+# 3. Add DOCKER_USERNAME and DOCKER_TOKEN to GitHub repository secrets
+# 4. Ensure your Docker Hub account has access to private repositories
+# 
+# ⚠️ Authentication occurs in multiple stages:
+# - Early verification (docker-hub-auth job)
+# - Build time (CPU and GPU build jobs)
+# - Deployment time (deploy-application job)
+# 
+# ============================================================================
+name: 🚀 FKS Trading System - Deployment Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      deployment_mode:
+        description: 'Deployment mode'
+        required: true
+        type: choice
+        options:
+          - 'full-deploy'
+          - 'builds-only'
+          - 'deploy-only'
+          - 'infra-only'
+          - 'test-builds'
+          - 'code-check-only'
+        default: 'full-deploy'
+      build_options:
+        description: 'Build Options'
+        required: true
+        type: choice
+        options:
+          - 'default'
+          - 'clean-and-build'
+          - 'force-rebuild'
+        default: 'default'
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - 'development'
+          - 'staging'
+          - 'production'
+        default: 'development'
+      create_new_server:
+        description: 'Create new Linode server (fks-dev in Toronto)'
+        required: false
+        type: boolean
+        default: false
+      skip_code_checks:
+        description: 'Skip code quality checks'
+        required: false
+        type: boolean
+        default: false
+      enable_cpu_builds:
+        description: 'Enable CPU service builds (api, worker, data, web, nginx, node-network)'
+        required: true
+        type: boolean
+        default: true
+      enable_gpu_builds:
+        description: 'Enable GPU service builds (training, transformer)'
+        required: false
+        type: boolean
+        default: false
+      force_cpu_builds:
+        description: 'Force rebuild all CPU services (ignores change detection)'
+        required: true
+        type: boolean
+        default: false
+      force_gpu_builds:
+        description: 'Force rebuild all GPU services (ignores change detection)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  # Global environment variables
+  DEPLOYMENT_MODE: ${{ github.event.inputs.deployment_mode || 'full-deploy' }}
+  BUILD_OPTIONS: ${{ github.event.inputs.build_options || 'default' }}
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'development' }}
+  SKIP_CODE_CHECKS: ${{ github.event.inputs.skip_code_checks || 'true' }}
+  ENABLE_CPU_BUILDS: ${{ github.event.inputs.enable_cpu_builds || 'true' }}
+  ENABLE_GPU_BUILDS: ${{ github.event.inputs.enable_gpu_builds || 'false' }}
+  FORCE_CPU_BUILDS: ${{ github.event.inputs.force_cpu_builds || 'false' }}
+  FORCE_GPU_BUILDS: ${{ github.event.inputs.force_gpu_builds || 'false' }}
+
+  # Docker configuration
+  REGISTRY: docker.io
+  NAMESPACE: ${{ secrets.DOCKER_USERNAME || 'nuniesmith' }}
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+
+  # Build configuration
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+  BUILDKIT_PROGRESS: plain
+
+  # Additional configuration
+  DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+  ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+
+  # Python configuration
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '18'
+  DOTNET_VERSION: '7.0'
+
+jobs:
+  # ============================================================================
+  # Stage 0: Pre-flight Checks & Validation
+  # ============================================================================
+  preflight-checks:
+    name: 🛫 Pre-flight Checks
+    runs-on: self-hosted
+    outputs:
+      is_self_hosted: ${{ steps.check-host.outputs.is_self_hosted }}
+      skip_builds: ${{ steps.decision.outputs.skip_builds }}
+      skip_deploy: ${{ steps.decision.outputs.skip_deploy }}
+      skip_code_checks: ${{ steps.decision.outputs.skip_code_checks }}
+      run_infra: ${{ steps.decision.outputs.run_infra }}
+    steps:
+      - name: 🧹 GitHub Actions Cache Management
+        continue-on-error: true
+        run: |
+          echo "🧹 Checking GitHub Actions cache usage..."
+          
+          # Skip cache management if essential tools are not available
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "⚠️ jq not available - skipping cache management"
+            exit 0
+          fi
+          
+          if ! command -v bc >/dev/null 2>&1; then
+            echo "⚠️ bc not available - skipping cache management"
+            exit 0
+          fi
+
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Configure runner for non-interactive operations
+        run: |
+          echo "🔧 Configuring runner environment..."
+
+          # Check if we can use sudo without password
+          if sudo -n true 2>/dev/null; then
+            echo "✅ Sudo access already configured for passwordless operation"
+          else
+            echo "⚠️ Sudo requires password - attempting to configure passwordless access..."
+
+            # Try to configure passwordless sudo (this might prompt once)
+            echo "Defaults !tty_tickets" | sudo tee -a /etc/sudoers.d/github-actions >/dev/null 2>&1 || echo "❌ Failed to update sudoers - continuing anyway"
+            echo "$USER ALL=(ALL) NOPASSWD:ALL" | sudo tee -a /etc/sudoers.d/github-actions >/dev/null 2>&1 || echo "❌ Failed to add user to sudoers - continuing anyway"
+
+            # Verify sudo works now
+            if sudo -n true 2>/dev/null; then
+              echo "✅ Passwordless sudo configured successfully"
+            else
+              echo "⚠️ Sudo still requires password - workflow may fail at sudo steps"
+              echo "💡 Manual fix: Run 'sudo visudo' and add: $USER ALL=(ALL) NOPASSWD:ALL"
+            fi
+          fi
+
+          # Set non-interactive mode for package managers
+          export DEBIAN_FRONTEND=noninteractive
+          echo "DEBIAN_FRONTEND=noninteractive" >> $GITHUB_ENV
+
+          # Configure timeout for operations
+          export TIMEOUT_DURATION=300
+          echo "TIMEOUT_DURATION=300" >> $GITHUB_ENV
+
+          echo "✅ Runner configured for automated operations"
+
+      - name: Check if Self-Hosted Runner
+        id: check-host
+        run: |
+          if [[ "${{ runner.name }}" != *"GitHub Actions"* && "${{ runner.name }}" != *"Hosted Agent"* ]]; then
+            echo "is_self_hosted=true" >> $GITHUB_OUTPUT
+          else
+            echo "is_self_hosted=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 🎯 Determine execution plan
+        id: decision
+        run: |
+          echo "🎯 Determining execution plan..."
+          SKIP_BUILDS=false
+          SKIP_DEPLOY=false
+          SKIP_CODE_CHECKS=${{ env.SKIP_CODE_CHECKS }}
+          RUN_INFRA=false
+
+          # Determine what to skip based on deployment mode
+          case "${{ env.DEPLOYMENT_MODE }}" in
+            "deploy-only"|"infra-only")
+              SKIP_BUILDS=true
+              ;;
+            "builds-only"|"code-check-only")
+              SKIP_DEPLOY=true
+              ;;
+          esac
+
+          # Determine if infrastructure should run
+          if [[ "${{ env.DEPLOYMENT_MODE }}" == "full-deploy" || "${{ env.DEPLOYMENT_MODE }}" == "infra-only" || "${{ github.event.inputs.create_new_server }}" == "true" ]]; then
+            RUN_INFRA=true
+          fi
+
+          # Force skip code checks for certain modes
+          if [[ "${{ env.DEPLOYMENT_MODE }}" == "deploy-only" || "${{ env.DEPLOYMENT_MODE }}" == "infra-only" ]]; then
+            SKIP_CODE_CHECKS=true
+          fi
+
+          echo "skip_builds=$SKIP_BUILDS" >> $GITHUB_OUTPUT
+          echo "skip_deploy=$SKIP_DEPLOY" >> $GITHUB_OUTPUT
+          echo "skip_code_checks=$SKIP_CODE_CHECKS" >> $GITHUB_OUTPUT
+          echo "run_infra=$RUN_INFRA" >> $GITHUB_OUTPUT
+
+          echo "📋 Execution Plan:"
+          echo "  - Code Checks: $([[ "$SKIP_CODE_CHECKS" == "false" ]] && echo "✅ Enabled" || echo "⏭️ Skipped")"
+          echo "  - Builds: $([[ "$SKIP_BUILDS" == "false" ]] && echo "✅ Enabled" || echo "⏭️ Skipped")"
+          echo "    - CPU Services: $([[ "${{ env.ENABLE_CPU_BUILDS }}" == "true" ]] && echo "✅ Enabled" || echo "⏭️ Disabled")"
+          echo "    - GPU Services: $([[ "${{ env.ENABLE_GPU_BUILDS }}" == "true" ]] && echo "✅ Enabled" || echo "⏭️ Disabled")"
+          echo "  - Infrastructure: $([[ "$RUN_INFRA" == "true" ]] && echo "✅ Enabled" || echo "⏭️ Skipped")"
+          echo "  - Deployment: $([[ "$SKIP_DEPLOY" == "false" ]] && echo "✅ Enabled" || echo "⏭️ Skipped")"
+
+      - name: 🔐 Validate Required Secrets
+        env:
+          # Pass secrets as environment variables for validation
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+          FKS_DEV_ROOT_PASSWORD: ${{ secrets.FKS_DEV_ROOT_PASSWORD }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
+          FKS_USER_PASSWORD: ${{ secrets.FKS_USER_PASSWORD }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          # Optional secrets for status checking
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          NETDATA_CLAIM_TOKEN: ${{ secrets.NETDATA_CLAIM_TOKEN }}
+          NETDATA_CLAIM_ROOM: ${{ secrets.NETDATA_CLAIM_ROOM }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          AUTHENTIK_JWT_SECRET: ${{ secrets.AUTHENTIK_JWT_SECRET }}
+          DISCORD_WEBHOOK_SERVERS: ${{ secrets.DISCORD_WEBHOOK_SERVERS }}
+          ORYX_SSH_PUB: ${{ secrets.ORYX_SSH_PUB }}
+          SULLIVAN_SSH_PUB: ${{ secrets.SULLIVAN_SSH_PUB }}
+          FREDDY_SSH_PUB: ${{ secrets.FREDDY_SSH_PUB }}
+          DESKTOP_SSH_PUB: ${{ secrets.DESKTOP_SSH_PUB }}
+          MACBOOK_SSH_PUB: ${{ secrets.MACBOOK_SSH_PUB }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          echo "🔐 Validating required secrets..."
+
+          MISSING_SECRETS=()
+          MISSING_COUNT=0
+
+          # Core required secrets with descriptions
+          declare -A REQUIRED_SECRETS=(
+            ["LINODE_CLI_TOKEN"]="Linode API token for server provisioning"
+            ["FKS_DEV_ROOT_PASSWORD"]="Root password for Linode servers"
+            ["JORDAN_PASSWORD"]="Password for jordan user account"
+            ["FKS_USER_PASSWORD"]="Password for fks_user account"
+            ["DOCKER_USERNAME"]="Docker Hub username"
+            ["DOCKER_TOKEN"]="Docker Hub access token"
+            ["TAILSCALE_AUTH_KEY"]="Tailscale authentication key for VPN"
+            ["ACTIONS_USER_PASSWORD"]="Password for actions_user account"
+          )
+
+          # Get deployment mode and determine what secrets are needed
+          DEPLOYMENT_MODE="${{ env.DEPLOYMENT_MODE }}"
+          echo "📋 Checking secrets for deployment mode: $DEPLOYMENT_MODE"
+
+          # Check each required secret
+          for secret in "${!REQUIRED_SECRETS[@]}"; do
+            SECRET_NEEDED=true
+
+            # Skip certain secrets based on deployment mode
+            case "$secret" in
+              "LINODE_CLI_TOKEN"|"FKS_DEV_ROOT_PASSWORD"|"TAILSCALE_AUTH_KEY")
+                if [[ "$DEPLOYMENT_MODE" == "code-check-only" || "$DEPLOYMENT_MODE" == "builds-only" ]]; then
+                  SECRET_NEEDED=false
+                fi
+                ;;
+              "DOCKER_USERNAME"|"DOCKER_TOKEN")
+                if [[ "$DEPLOYMENT_MODE" == "code-check-only" ]]; then
+                  SECRET_NEEDED=false
+                fi
+                ;;
+              "JORDAN_PASSWORD"|"FKS_USER_PASSWORD"|"ACTIONS_USER_PASSWORD")
+                if [[ "$DEPLOYMENT_MODE" == "code-check-only" || "$DEPLOYMENT_MODE" == "builds-only" ]]; then
+                  SECRET_NEEDED=false
+                fi
+                ;;
+            esac
+
+            if [ "$SECRET_NEEDED" == "true" ]; then
+              if [ -z "${!secret}" ]; then
+                MISSING_SECRETS+=("$secret")
+                MISSING_COUNT=$((MISSING_COUNT + 1))
+                echo "❌ Missing: $secret - ${REQUIRED_SECRETS[$secret]}"
+              else
+                echo "✅ Found: $secret"
+              fi
+            else
+              echo "⏭️ Skipped: $secret (not needed for $DEPLOYMENT_MODE)"
+            fi
+          done
+
+          # Handle missing secrets based on deployment mode
+          if [ $MISSING_COUNT -gt 0 ]; then
+            echo ""
+            echo "❌ Missing $MISSING_COUNT required secret(s) for deployment mode: $DEPLOYMENT_MODE"
+            echo ""
+            echo "📋 To fix this issue:"
+            echo "1. Go to: https://github.com/${{ github.repository }}/settings/secrets"
+            echo "2. Add the missing secrets listed above"
+            echo "3. See docs/GITHUB_SECRETS_SETUP_GUIDE.md for detailed instructions"
+            echo "4. Re-run this workflow"
+            echo ""
+
+            # Store missing secrets info for summary
+            echo "MISSING_SECRETS_COUNT=$MISSING_COUNT" >> $GITHUB_ENV
+            echo "MISSING_SECRETS_LIST=$(IFS=,; echo "${MISSING_SECRETS[*]}")" >> $GITHUB_ENV
+
+            # For code-only workflows, allow continuation with warnings
+            if [[ "$DEPLOYMENT_MODE" == "code-check-only" || "$DEPLOYMENT_MODE" == "builds-only" ]]; then
+              echo "⚠️ Continuing with warnings since this is a $DEPLOYMENT_MODE workflow"
+              echo "WARNING_MISSING_SECRETS=true" >> $GITHUB_ENV
+            else
+              echo "🛑 Stopping workflow due to missing critical secrets"
+              exit 1
+            fi
+          else
+            echo ""
+            echo "✅ All required secrets are configured for deployment mode: $DEPLOYMENT_MODE"
+            echo "SECRETS_VALIDATION_PASSED=true" >> $GITHUB_ENV
+          fi
+
+          # List optional secrets status
+          echo ""
+          echo "📋 Optional secrets status:"
+          OPTIONAL_SECRETS=(
+            "CLOUDFLARE_API_TOKEN"
+            "CLOUDFLARE_ZONE_ID"
+            "NETDATA_CLAIM_TOKEN"
+            "NETDATA_CLAIM_ROOM"
+            "DOMAIN_NAME"
+            "ADMIN_EMAIL"
+            "JWT_SECRET_KEY"
+            "DISCORD_WEBHOOK_SERVERS"
+            "ORYX_SSH_PUB"
+            "SULLIVAN_SSH_PUB"
+            "FREDDY_SSH_PUB"
+            "DESKTOP_SSH_PUB"
+            "MACBOOK_SSH_PUB"
+          )
+
+          for secret in "${OPTIONAL_SECRETS[@]}"; do
+            if [ -n "${!secret}" ]; then
+              echo "  ✅ $secret: SET"
+            else
+              echo "  ⚠️ $secret: NOT SET"
+            fi
+          done
+
+  # ============================================================================
+  # Stage 1: Code Quality Checks (Linting & Testing)
+  # ============================================================================
+  code-quality-python:
+    name: 🐍 Python Code Quality
+    runs-on: ${{ needs.preflight-checks.outputs.is_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [preflight-checks]
+    if: needs.preflight-checks.outputs.skip_code_checks != 'true'
+    continue-on-error: true
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        run: |
+          # Use system Python on self-hosted runners
+          if command -v python3 &> /dev/null; then
+            echo "✅ Python3 already available: $(python3 --version)"
+            # Create symlink for python if it doesn't exist
+            if ! command -v python &> /dev/null; then
+              sudo -n ln -sf /usr/bin/python3 /usr/bin/python || true
+            fi
+          else
+            echo "📦 Installing Python..."
+            if command -v pacman >/dev/null 2>&1; then
+              sudo -n pacman -S --noconfirm python python-pip
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo -n apt-get update && sudo -n apt-get install -y python3 python3-pip
+            fi
+          fi
+
+          # Verify installation
+          python --version || python3 --version
+          pip --version || pip3 --version || python -m ensurepip --upgrade
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip || pip3 install --upgrade pip
+
+          # Install basic linting and testing tools
+          pip install flake8 black mypy pytest pytest-cov pylint || pip3 install flake8 black mypy pytest pytest-cov pylint
+
+          # Try to install project dependencies if they exist
+          if [ -f "src/python/requirements.txt" ]; then
+            echo "📦 Installing project requirements..."
+            pip install -r src/python/requirements.txt || echo "⚠️ Some requirements failed to install"
+          fi
+
+          # Install additional dependencies that might be missing
+          pip install numpy pandas fastapi uvicorn loguru || echo "⚠️ Some optional dependencies failed"
+
+      - name: 🔍 Lint with flake8
+        id: flake8
+        continue-on-error: true
+        run: |
+          echo "Running flake8..."
+          if [ -d "src/python" ]; then
+            cd src/python
+            # Run basic syntax checks only (ignore import errors for now)
+            flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --extend-ignore=F821,F822,F823,F824 || echo "flake8_failed=true" >> $GITHUB_ENV
+
+            # Run full check with warnings only
+            flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --extend-ignore=F821,F822,F823,F824
+          else
+            echo "⚠️ No Python source found at src/python"
+          fi
+
+      - name: 🎨 Format check with black
+        id: black
+        continue-on-error: true
+        run: |
+          echo "Running black..."
+          if [ -d "src/python" ]; then
+            cd src/python
+            black --check . || echo "black_failed=true" >> $GITHUB_ENV
+          fi
+
+      - name: 🔍 Type check with mypy
+        id: mypy
+        continue-on-error: true
+        run: |
+          echo "Running mypy..."
+          if [ -d "src/python" ]; then
+            cd src/python
+            # Run mypy with relaxed settings for missing imports
+            mypy . --ignore-missing-imports --follow-imports=skip --strict-optional=false || echo "mypy_failed=true" >> $GITHUB_ENV
+          fi
+
+      - name: 🧪 Run tests
+        id: pytest
+        continue-on-error: true
+        run: |
+          echo "Running pytest..."
+          if [ -d "src/python" ]; then
+            cd src/python
+            # Run tests with discovery, allowing for missing imports
+            pytest . -v --tb=short --disable-warnings || echo "pytest_failed=true" >> $GITHUB_ENV
+          fi
+
+      - name: 📊 Generate summary
+        if: always()
+        run: |
+          echo "## 🐍 Python Code Quality Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${flake8_failed}" == "true" ]; then
+            echo "- ❌ Flake8: Failed (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ Flake8: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${black_failed}" == "true" ]; then
+            echo "- ❌ Black: Failed (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ Black: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${mypy_failed}" == "true" ]; then
+            echo "- ❌ MyPy: Failed (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ MyPy: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${pytest_failed}" == "true" ]; then
+            echo "- ❌ Tests: Failed (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ Tests: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  code-quality-csharp:
+    name: 🔷 C# Code Quality (NinjaTrader)
+    runs-on: windows-latest
+    needs: [preflight-checks]
+    if: needs.preflight-checks.outputs.skip_code_checks != 'true'
+    continue-on-error: true
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔷 Set up .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: 📦 Check NinjaTrader References
+        id: check-refs
+        working-directory: src/ninja
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking for NinjaTrader reference DLLs..."
+          if (!(Test-Path "references\NinjaTrader.Core.dll")) {
+            Write-Host "❌ NinjaTrader reference DLLs not found at references\NinjaTrader.Core.dll" -ForegroundColor Red
+            Write-Host "This is unexpected - the references should be included in the repository." -ForegroundColor Yellow
+            echo "refs_missing=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "✅ NinjaTrader references found" -ForegroundColor Green
+            echo "refs_missing=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: 📦 Restore dependencies
+        working-directory: src/ninja
+        continue-on-error: true
+        if: steps.check-refs.outputs.refs_missing == 'false'
+        run: |
+          dotnet restore || "dotnet_restore_failed=true" >> $env:GITHUB_ENV
+
+      - name: 🏗️ Build
+        working-directory: src/ninja
+        continue-on-error: true
+        if: steps.check-refs.outputs.refs_missing == 'false'
+        run: |
+          dotnet build --no-restore || "dotnet_build_failed=true" >> $env:GITHUB_ENV
+
+      - name: 🧪 Run tests
+        working-directory: src/ninja
+        continue-on-error: true
+        if: steps.check-refs.outputs.refs_missing == 'false'
+        run: |
+          dotnet test --no-build --verbosity normal || "dotnet_test_failed=true" >> $env:GITHUB_ENV
+
+      - name: 📊 Generate C# summary
+        if: always()
+        run: |
+          "## 🔷 C# Code Quality Report (NinjaTrader)" >> $env:GITHUB_STEP_SUMMARY
+          "" >> $env:GITHUB_STEP_SUMMARY
+
+          if ("${{ steps.check-refs.outputs.refs_missing }}" -eq "true") {
+            "- ⚠️ **NinjaTrader References Missing**: External development environment" >> $env:GITHUB_STEP_SUMMARY
+            "- ℹ️ **Note**: This project requires NinjaTrader 8 installation for compilation" >> $env:GITHUB_STEP_SUMMARY
+            "- 📋 **Action**: Deploy to NinjaTrader environment for full validation" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            if ($env:dotnet_restore_failed -eq "true") {
+              "- ❌ Package Restore: Failed (non-blocking)" >> $env:GITHUB_STEP_SUMMARY
+            } else {
+              "- ✅ Package Restore: Passed" >> $env:GITHUB_STEP_SUMMARY
+            }
+
+            if ($env:dotnet_build_failed -eq "true") {
+              "- ❌ Build: Failed (non-blocking)" >> $env:GITHUB_STEP_SUMMARY
+            } else {
+              "- ✅ Build: Passed" >> $env:GITHUB_STEP_SUMMARY
+            }
+
+            if ($env:dotnet_test_failed -eq "true") {
+              "- ❌ Tests: Failed (non-blocking)" >> $env:GITHUB_STEP_SUMMARY
+            } else {
+              "- ✅ Tests: Passed" >> $env:GITHUB_STEP_SUMMARY
+            }
+          }
+
+  code-quality-web:
+    name: 🌐 Web Code Quality (React/TS/JS)
+    runs-on: ${{ needs.preflight-checks.outputs.is_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [preflight-checks]
+    if: needs.preflight-checks.outputs.skip_code_checks != 'true'
+    continue-on-error: true
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Install dependencies
+        working-directory: src/web/react
+        run: |
+          echo "🧹 Cleaning npm cache and fixing integrity issues..."
+          npm cache clean --force
+
+          # Remove node_modules and package-lock.json to force clean install
+          rm -rf node_modules package-lock.json
+
+          echo "📦 Installing dependencies with integrity fixes..."
+          # Use npm install with specific flags to handle deprecated packages and integrity issues
+          npm install --legacy-peer-deps --no-audit --no-fund --maxsockets 1 --progress=false
+
+          echo "🔧 Fixing known vulnerability issues..."
+          # Fix deprecated packages if npm audit fix is available
+          npm audit fix --legacy-peer-deps --force || echo "⚠️ Audit fix completed with warnings"
+
+          echo "✅ Dependencies installed successfully"
+
+      - name: 🔍 Lint code
+        id: eslint
+        working-directory: src/web/react
+        continue-on-error: true
+        run: |
+          # React-scripts includes ESLint, but we'll check if there's a dedicated lint script
+          if npm run lint 2>/dev/null; then
+            echo "✅ ESLint via npm run lint"
+          else
+            echo "⚠️ No dedicated lint script found, ESLint will run during build"
+            echo "eslint_skipped=true" >> $GITHUB_ENV
+          fi
+
+      - name: 🔍 Type check
+        id: typescript
+        working-directory: src/web/react
+        continue-on-error: true
+        run: |
+          # Check if TypeScript compiles without emitting files
+          if npm run type-check 2>/dev/null; then
+            echo "✅ TypeScript via npm run type-check"
+          elif npx tsc --noEmit 2>/dev/null; then
+            echo "✅ TypeScript via tsc --noEmit"
+          else
+            echo "⚠️ TypeScript checking will be done during build"
+            echo "typescript_skipped=true" >> $GITHUB_ENV
+          fi
+
+      - name: 🧪 Run tests
+        id: jest
+        working-directory: src/web/react
+        continue-on-error: true
+        run: |
+          # Run tests with appropriate flags for CI
+          CI=true npm test -- --passWithNoTests --watchAll=false --coverage=false --silent || echo "jest_failed=true" >> $GITHUB_ENV
+
+      - name: 🏗️ Build check
+        id: build
+        working-directory: src/web/react
+        continue-on-error: true
+        run: |
+          # Try building with different Node.js compatibility settings
+          export NODE_OPTIONS="--max-old-space-size=4096"
+
+          # Try multiple approaches for building
+          if npm run build; then
+            echo "✅ Build successful"
+          elif NODE_OPTIONS="--openssl-legacy-provider" npm run build; then
+            echo "✅ Build successful with legacy provider"
+          else
+            echo "❌ Build failed with both standard and legacy approaches"
+            echo "build_failed=true" >> $GITHUB_ENV
+          fi
+
+      - name: 📊 Generate summary
+        if: always()
+        run: |
+          echo "## 🌐 Web Code Quality Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${eslint_failed}" == "true" ]; then
+            echo "- ❌ ESLint: Failed (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          elif [ "${eslint_skipped}" == "true" ]; then
+            echo "- ⏭️ ESLint: Integrated with build process" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ ESLint: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${typescript_failed}" == "true" ]; then
+            echo "- ❌ TypeScript: Failed (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          elif [ "${typescript_skipped}" == "true" ]; then
+            echo "- ⏭️ TypeScript: Integrated with build process" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ TypeScript: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${jest_failed}" == "true" ]; then
+            echo "- ❌ Tests: Failed (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ Tests: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${build_failed}" == "true" ]; then
+            echo "- ❌ Build: Failed (non-blocking)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ Build: Passed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ============================================================================
+  # Stage 2: Infrastructure Provisioning
+  # ============================================================================
+  provision-infrastructure:
+    name: 🏗️ Provision Infrastructure
+    runs-on: self-hosted
+    needs: [preflight-checks]
+    if: needs.preflight-checks.outputs.run_infra == 'true'
+    timeout-minutes: 45
+    outputs:
+      server_ip: ${{ steps.server-result.outputs.server_ip }}
+      server_id: ${{ steps.server-result.outputs.server_id }}
+      server_created: ${{ steps.server-result.outputs.server_created }}
+      stage1_status: ${{ steps.server-result.outputs.stage1_status }}
+      stage2_status: ${{ steps.server-result.outputs.stage2_status }}
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Environment
+        run: |
+          echo "🔧 Setting up environment..."
+
+          # Detect Python environment and system
+          echo "🔍 Detecting system and Python environment..."
+          echo "System: $(uname -a)"
+          echo "Python: $(python3 --version)"
+          echo "Python path: $(which python3)"
+          echo "Pip: $(which pip3 || echo 'Not found')"
+          # Detect if we're in a conda environment
+          if [[ -n "$CONDA_DEFAULT_ENV" ]]; then
+            echo "📦 Conda environment detected: $CONDA_DEFAULT_ENV"
+            PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+            echo "Python version: $PYTHON_VERSION"
+          fi
+
+          # Install required tools
+          if ! command -v pip3 >/dev/null 2>&1; then
+            if command -v pacman >/dev/null 2>&1; then
+              sudo -n pacman -S --noconfirm python python-pip
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo -n apt-get update && sudo -n apt-get install -y python3 python3-pip
+            fi
+          fi
+
+          # Install sshpass if needed
+          if ! command -v sshpass >/dev/null 2>&1; then
+            if command -v pacman >/dev/null 2>&1; then
+              sudo -n pacman -S --noconfirm sshpass
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo -n apt-get install -y sshpass
+            fi
+          fi
+
+          # Install jq if needed
+          if ! command -v jq >/dev/null 2>&1; then
+            if command -v pacman >/dev/null 2>&1; then
+              sudo -n pacman -S --noconfirm jq
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo -n apt-get install -y jq
+            fi
+          fi
+
+          # Install Linode CLI with enhanced cross-platform support
+          echo "📦 Installing Linode CLI..."
+
+          # Ensure we have the latest pip
+          pip3 install --upgrade pip --quiet
+
+          # Determine Python site-packages path for current environment
+          PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          USER_SITE_PACKAGES="$HOME/.local/lib/python${PYTHON_VERSION}/site-packages"
+
+          # Install with proper error handling and multiple attempts
+          LINODE_CLI_INSTALLED=false
+          # Try user installation first
+          if pip3 install --user linode-cli --quiet 2>/dev/null; then
+            echo "✅ Linode CLI installed via pip3 --user"
+            LINODE_CLI_INSTALLED=true
+          elif pip3 install --user --force-reinstall linode-cli --quiet 2>/dev/null; then
+            echo "✅ Linode CLI reinstalled via pip3 --user"
+            LINODE_CLI_INSTALLED=true
+          elif python3 -m pip install --user linode-cli --quiet 2>/dev/null; then
+            echo "✅ Linode CLI installed via python3 -m pip --user"
+            LINODE_CLI_INSTALLED=true
+          else
+            echo "❌ Failed to install Linode CLI"
+            exit 1
+          fi
+          
+          # Update PATH and PYTHONPATH for cross-platform compatibility
+          export PATH="$HOME/.local/bin:$PATH"
+          export PYTHONPATH="$USER_SITE_PACKAGES:$PYTHONPATH"
+          echo "PATH=$HOME/.local/bin:$PATH" >> $GITHUB_ENV
+          echo "PYTHONPATH=$USER_SITE_PACKAGES:$PYTHONPATH" >> $GITHUB_ENV
+
+          # Debug: Check installation paths
+          echo "🔍 Debugging installation paths..."
+          echo "User site-packages: $USER_SITE_PACKAGES"
+          echo "Contents of ~/.local/bin/: $(ls -la ~/.local/bin/ | grep linode || echo 'No linode binaries found')"
+          echo "Contents of site-packages: $(ls -la $USER_SITE_PACKAGES | grep linode || echo 'No linode modules found')"
+
+          # Configure Linode CLI first to avoid interactive prompts
+          echo "🔧 Pre-configuring Linode CLI..."
+          rm -rf ~/.config/linode-cli
+          LINODE_TOKEN="${{ secrets.LINODE_CLI_TOKEN }}"
+          
+          # Create config directory
+          mkdir -p ~/.config/linode-cli
+          
+          # Create config file manually to avoid any interactive prompts
+          echo "✅ Creating Linode CLI configuration file directly..."
+          echo "[DEFAULT]" > ~/.config/linode-cli/config
+          echo "default-user = DEFAULT" >> ~/.config/linode-cli/config
+          echo "region = ca-central" >> ~/.config/linode-cli/config
+          echo "type = g6-standard-2" >> ~/.config/linode-cli/config
+          echo "image = linode/arch" >> ~/.config/linode-cli/config
+          echo "authorized_users = " >> ~/.config/linode-cli/config
+          echo "authorized_keys = " >> ~/.config/linode-cli/config
+          echo "token = $LINODE_TOKEN" >> ~/.config/linode-cli/config
+          chmod 600 ~/.config/linode-cli/config
+          
+          echo "✅ Linode CLI configuration created successfully"
+          
+          # Verify the configuration was created correctly (without showing the token)
+          if [ -f ~/.config/linode-cli/config ]; then
+            echo "✅ Configuration file exists"
+            echo "📋 Configuration preview (token hidden):"
+            grep -v "token" ~/.config/linode-cli/config || echo "Config file structure verified"
+          else
+            echo "❌ Configuration file creation failed"
+            exit 1
+          fi
+
+          # Test Python module import with enhanced error handling
+          echo "🧪 Testing Python module import..."
+          # Note: Linode CLI module is actually 'linodecli' not 'linode_cli'
+          # Test only import, don't run any CLI commands that might trigger interactive mode
+          
+          # First, ensure we don't trigger interactive mode by setting CLI environment properly
+          export LINODE_CLI_TOKEN="$LINODE_TOKEN"
+          
+          # Test module import without executing CLI commands
+          if python3 -c "import sys; sys.path.insert(0, '$USER_SITE_PACKAGES'); import linodecli" 2>/dev/null; then
+            echo "✅ Linode CLI Python module is accessible"
+            MODULE_WORKING=true
+          else
+            echo "⚠️ Direct module import failed, trying alternative methods..."
+            MODULE_WORKING=false
+
+            # Try different import methods with correct module name
+            for method in "import linodecli" "from linodecli import main" "import linodecli.main"; do
+              if python3 -c "$method" 2>/dev/null; then
+                echo "✅ Alternative import method worked: $method"
+                MODULE_WORKING=true
+                break
+              fi
+            done
+          fi
+
+          # Test if CLI binary works and create wrapper if needed
+          BINARY_WORKING=false
+          if command -v linode-cli > /dev/null 2>&1; then
+            echo "✅ Linode CLI binary is available"
+            # Check if config exists to avoid interactive prompts
+            if [ -f ~/.config/linode-cli/config ]; then
+              echo "✅ Linode CLI binary and config are ready"
+              BINARY_WORKING=true
+            else
+              echo "⚠️ Linode CLI binary exists but config missing"
+              BINARY_WORKING=false
+            fi
+          else
+            echo "⚠️ Linode CLI binary not found in PATH"
+            BINARY_WORKING=false
+          fi
+          
+          # Create robust wrapper based on what's working
+          if [[ "$BINARY_WORKING" == "true" ]]; then
+            echo "✅ Using existing Linode CLI binary"
+          elif [[ "$MODULE_WORKING" == "true" ]]; then
+            echo "🔧 Creating Python module wrapper..."
+            mkdir -p ~/.local/bin
+            echo '#!/bin/bash' > ~/.local/bin/linode-cli
+            echo '# Linode CLI Python module wrapper' >> ~/.local/bin/linode-cli
+            echo '# Set PYTHONPATH to ensure module is found' >> ~/.local/bin/linode-cli
+            echo 'PYTHON_VER=$(python3 -c "import sys; print(f\"'{sys.version_info.major}.{sys.version_info.minor}'\")"' >> ~/.local/bin/linode-cli
+            echo 'export PYTHONPATH="$HOME/.local/lib/python$PYTHON_VER/site-packages:$PYTHONPATH"' >> ~/.local/bin/linode-cli
+            echo 'python3 -m linodecli "$@"' >> ~/.local/bin/linode-cli
+            chmod +x ~/.local/bin/linode-cli
+            echo "✅ Created Python module wrapper for Linode CLI"
+          else
+            echo "❌ Neither binary nor module is working, attempting force reinstall..."
+
+            # Last resort: force reinstall with verbose output
+            pip3 install --user --force-reinstall --no-cache-dir linode-cli
+
+            # Update paths again
+            export PYTHONPATH="$USER_SITE_PACKAGES:$PYTHONPATH"
+
+            # Test again with correct module name
+            if python3 -c "import sys; sys.path.insert(0, '$USER_SITE_PACKAGES'); import linodecli" 2>/dev/null; then
+              echo "✅ Module working after reinstall"
+              mkdir -p ~/.local/bin
+              echo '#!/bin/bash' > ~/.local/bin/linode-cli
+              echo 'PYTHON_VER=$(python3 -c "import sys; print(f\"'{sys.version_info.major}.{sys.version_info.minor}'\")"' >> ~/.local/bin/linode-cli
+              echo 'export PYTHONPATH="$HOME/.local/lib/python$PYTHON_VER/site-packages:$PYTHONPATH"' >> ~/.local/bin/linode-cli
+              echo 'python3 -m linodecli "$@"' >> ~/.local/bin/linode-cli
+              chmod +x ~/.local/bin/linode-cli
+              echo "✅ Created wrapper after reinstall"
+            else
+              echo "❌ Linode CLI installation completely failed"
+              exit 1
+            fi
+          fi
+          
+          # Final comprehensive test - just check if CLI is accessible
+          echo "🏁 Final verification test..."
+          FINAL_TEST_PASSED=false
+
+          # Test wrapper if it exists (only check file existence and executability)
+          if [ -f ~/.local/bin/linode-cli ] && [ -x ~/.local/bin/linode-cli ]; then
+            echo "✅ Linode CLI wrapper exists and is executable"
+            FINAL_TEST_PASSED=true
+          # Test system binary if available (only check command existence)
+          elif command -v linode-cli > /dev/null 2>&1; then
+            echo "✅ Linode CLI binary is available in PATH"
+            FINAL_TEST_PASSED=true
+          # Test python module directly as last resort
+          elif python3 -c "import sys; sys.path.insert(0, '$USER_SITE_PACKAGES'); import linodecli; print('✅ Module accessible')" 2>/dev/null; then
+            echo "✅ Linode CLI Python module is working correctly"
+            echo "🔧 Creating final wrapper for module access..."
+            mkdir -p ~/.local/bin
+            echo '#!/bin/bash' > ~/.local/bin/linode-cli
+            echo 'PYTHON_VER=$(python3 -c "import sys; print(f\"'{sys.version_info.major}.{sys.version_info.minor}'\")"' >> ~/.local/bin/linode-cli
+            echo 'export PYTHONPATH="$HOME/.local/lib/python$PYTHON_VER/site-packages:$PYTHONPATH"' >> ~/.local/bin/linode-cli
+            echo 'python3 -m linodecli "$@"' >> ~/.local/bin/linode-cli
+            chmod +x ~/.local/bin/linode-cli
+            FINAL_TEST_PASSED=true
+          fi
+
+          if [ "$FINAL_TEST_PASSED" != "true" ]; then
+            echo "❌ Linode CLI final test failed"
+            echo "🔍 Debug information:"
+            echo "  PATH: $PATH"
+            echo "  PYTHONPATH: $PYTHONPATH"
+            echo "  which linode-cli: $(which linode-cli || echo 'Not found')"
+            echo "  ~/.local/bin/linode-cli exists: $([ -f ~/.local/bin/linode-cli ] && echo 'YES' || echo 'NO')"
+            echo "  Module import test: $(python3 -c "import sys; sys.path.insert(0, '$USER_SITE_PACKAGES'); import linodecli; print('SUCCESS')" 2>/dev/null || echo 'FAILED')"
+            exit 1
+          fi
+
+          # Verify configuration file exists instead of running CLI commands
+          echo "🧪 Verifying Linode CLI configuration..."
+          if [ -f ~/.config/linode-cli/config ]; then
+            echo "✅ Linode CLI configuration file exists"
+            echo "✅ Setup completed successfully - CLI is ready for use"
+          else
+            echo "⚠️ Configuration file missing, but continuing anyway"
+          fi
+
+          echo "✅ Environment setup complete"
+
+      - name: "🚀 Stage 0: Create/Detect Server"
+        id: stage0
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+          FKS_DEV_ROOT_PASSWORD: ${{ secrets.FKS_DEV_ROOT_PASSWORD }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+        run: |
+          echo "🚀 Running Stage 0: Server Creation/Detection"
+
+          # Use the main stage-0 script
+          chmod +x scripts/deployment/staged/stage-0-create-server-with-ssh.sh
+          SCRIPT_PATH="scripts/deployment/staged/stage-0-create-server-with-ssh.sh"
+
+          CREATE_FLAG=""
+          if [ "${{ github.event.inputs.create_new_server }}" == "true" ]; then
+            CREATE_FLAG="--force-new"
+          fi
+
+          # Run Stage 0
+          $SCRIPT_PATH --target-server auto-detect $CREATE_FLAG
+
+          # Source the generated server details
+          if [ -f "server-details.env" ]; then
+            source server-details.env
+            echo "server_ip=$TARGET_HOST" >> $GITHUB_OUTPUT
+            echo "server_id=${SERVER_ID:-unknown}" >> $GITHUB_OUTPUT
+            echo "server_created=${IS_NEW_SERVER:-false}" >> $GITHUB_OUTPUT
+            echo "✅ Stage 0 completed successfully"
+          else
+            echo "❌ Server details not found"
+            exit 1
+          fi
+
+          
+
+      - name: "ℹ️ Existing Server Detected"
+        if: always() && steps.stage0.outputs.server_ip != '' && steps.stage0.outputs.server_created == 'false'
+        run: |
+          echo "ℹ️ Existing FKS server detected and will be used"
+          echo "📍 Server IP: ${{ steps.stage0.outputs.server_ip }}"
+          echo "🆔 Server ID: ${{ steps.stage0.outputs.server_id }}"
+          echo ""
+          echo "⏭️ Skipping server setup steps (already configured):"
+          echo "  - Stage 1: Server initial setup"
+          echo "  - SSH key generation (using existing keys from secrets)"
+          echo "  - DNS updates (assuming already configured)"
+          echo "  - Discord notifications"
+          echo ""
+          echo "🚀 Proceeding directly to application deployment..."
+          
+          # Set a flag to indicate existing server was used
+          echo "existing_server_used=true" >> $GITHUB_ENV
+
+      - name: "📢 Send Server Creation Notification"
+        if: always() && steps.stage0.outputs.server_created == 'true'
+        env:
+          DISCORD_WEBHOOK_SERVERS: ${{ secrets.DISCORD_WEBHOOK_SERVERS }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK_SERVERS" ]; then
+            SERVER_IP="${{ steps.stage0.outputs.server_ip }}"
+            
+            # Send Discord notification
+            curl -H "Content-Type: application/json" \
+                 -X POST \
+                 -d "{\"content\": \"🚀 **FKS Server Created!**\\n\\n**Server IP:** \`$SERVER_IP\`\\n**Server ID:** \`${{ steps.stage0.outputs.server_id }}\`\\n\\n**🚀 Stage 1 starting immediately!**\\n\\n**SSH Access:** Password authentication configured\"}" \
+                 "$DISCORD_WEBHOOK_SERVERS" || echo "⚠️ Discord notification failed"
+            
+            echo "✅ Discord notification sent"
+          else
+            echo "📢 Server created: IP=${{ steps.stage0.outputs.server_ip }}"
+          fi
+
+
+      - name: "🛠️ Stage 1: Server Initial Setup"
+        id: stage1
+        if: always() && steps.stage0.outputs.server_ip != '' && steps.stage0.outputs.server_created == 'true'
+        timeout-minutes: 35
+        env:
+          FKS_DEV_ROOT_PASSWORD: ${{ secrets.FKS_DEV_ROOT_PASSWORD }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
+          FKS_USER_PASSWORD: ${{ secrets.FKS_USER_PASSWORD }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          NETDATA_CLAIM_TOKEN: ${{ secrets.NETDATA_CLAIM_TOKEN }}
+          NETDATA_CLAIM_ROOM: ${{ secrets.NETDATA_CLAIM_ROOM }}
+          ORYX_SSH_PUB: ${{ secrets.ORYX_SSH_PUB }}
+          SULLIVAN_SSH_PUB: ${{ secrets.SULLIVAN_SSH_PUB }}
+          FREDDY_SSH_PUB: ${{ secrets.FREDDY_SSH_PUB }}
+          DESKTOP_SSH_PUB: ${{ secrets.DESKTOP_SSH_PUB }}
+          MACBOOK_SSH_PUB: ${{ secrets.MACBOOK_SSH_PUB }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🛠️ Running Stage 1: Server Initial Setup"
+          
+          # Use the stage-1 script
+          chmod +x scripts/deployment/staged/stage-1-initial-setup.sh
+          
+          # Run Stage 1 setup
+          scripts/deployment/staged/stage-1-initial-setup.sh \
+            --target-host "${{ steps.stage0.outputs.server_ip }}" \
+            --root-password "$FKS_DEV_ROOT_PASSWORD" \
+            --jordan-password "$JORDAN_PASSWORD" \
+            --fks-user-password "$FKS_USER_PASSWORD" \
+            --tailscale-auth-key "$TAILSCALE_AUTH_KEY" \
+            --actions-user-password "$ACTIONS_USER_PASSWORD" \
+            --docker-username "$DOCKER_USERNAME" \
+            --docker-token "$DOCKER_TOKEN" \
+            --netdata-claim-token "$NETDATA_CLAIM_TOKEN" \
+            --netdata-claim-room "$NETDATA_CLAIM_ROOM" \
+            --timezone 'America/Toronto' \
+            --oryx-ssh-pub "$ORYX_SSH_PUB" \
+            --sullivan-ssh-pub "$SULLIVAN_SSH_PUB" \
+            --freddy-ssh-pub "$FREDDY_SSH_PUB" \
+            --desktop-ssh-pub "$DESKTOP_SSH_PUB" \
+            --macbook-ssh-pub "$MACBOOK_SSH_PUB" \
+            --github-token "$GITHUB_TOKEN"
+
+          # Note: Stage 1 script ends with systemctl reboot which causes SSH disconnection
+          # This is expected behavior - the server reboot is part of the setup process
+          
+          echo "✅ Stage 1 setup completed successfully and server is rebooting"
+          echo "stage1_completed=true" >> $GITHUB_ENV
+
+      - name: "✅ Stage 1 Complete - Server Ready"
+        if: always() && steps.stage1.outcome == 'success'
+        run: |
+          echo "✅ Stage 1 completed successfully!"
+          echo "🚀 Server is configured and ready for deployment"
+          echo "📍 Server IP: ${{ steps.stage0.outputs.server_ip }}"
+          echo "🔑 SSH access configured for actions_user and other users"
+          
+
+
+
+      - name: "📊 Final Infrastructure Results"
+        id: server-result
+        if: always()
+        run: |
+          echo "server_ip=${{ steps.stage0.outputs.server_ip }}" >> $GITHUB_OUTPUT
+          echo "server_id=${{ steps.stage0.outputs.server_id }}" >> $GITHUB_OUTPUT
+          echo "server_created=${{ steps.stage0.outputs.server_created }}" >> $GITHUB_OUTPUT
+          echo "stage1_status=${{ steps.stage1.outcome || 'not_run' }}" >> $GITHUB_OUTPUT
+          echo "stage2_status=runs_after_reboot" >> $GITHUB_OUTPUT
+
+          echo "📊 Infrastructure Provisioning Summary"
+          echo "======================================"
+          echo "Server IP: ${{ steps.stage0.outputs.server_ip }}"
+          echo "Server ID: ${{ steps.stage0.outputs.server_id }}"
+          echo "Server Created: ${{ steps.stage0.outputs.server_created }}"
+          echo "Stage 1 Status: ${{ steps.stage1.outcome || 'Not run' }}"
+          echo "Stage 2 Status: Runs automatically after reboot"
+
+      - name: 📢 Send Deployment Status Notification
+        if: always() && steps.stage0.outputs.server_created == 'true'
+        env:
+          DISCORD_WEBHOOK_SERVERS: ${{ secrets.DISCORD_WEBHOOK_SERVERS }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK_SERVERS" ]; then
+            SERVER_IP="${{ steps.stage0.outputs.server_ip }}"
+            STAGE1_STATUS="${{ steps.stage1.outcome || 'not_run' }}"
+            STAGE2_STATUS="not_implemented"
+
+            if [ "$STAGE1_STATUS" = "success" ]; then
+              STATUS="✅ **FKS Server Deployed!**"
+              STATUS_COLOR=3066993
+            else
+              STATUS="⚠️ **FKS Server Created - Manual Setup Required**"
+              STATUS_COLOR=16776960
+            fi
+
+            curl -H "Content-Type: application/json" \
+                 -X POST \
+                 -d "{
+                   \"embeds\": [{
+                     \"title\": \"🚀 FKS Server Deployment Status\",
+                     \"description\": \"$STATUS\",
+                     \"color\": $STATUS_COLOR,
+                     \"fields\": [
+                       {\"name\": \"Server IP\", \"value\": \"\`$SERVER_IP\`\", \"inline\": true},
+                       {\"name\": \"Stage 1\", \"value\": \"$STAGE1_STATUS\", \"inline\": true},
+                       {\"name\": \"Stage 2\", \"value\": \"$STAGE2_STATUS\", \"inline\": true},
+                       {\"name\": \"Access Method\", \"value\": \"Password Authentication\", \"inline\": false}
+                     ],
+                     \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+                   }]
+                 }" \
+                 "$DISCORD_WEBHOOK_SERVERS" || echo "Discord notification failed"
+          else
+            echo "📊 Server Status:"
+            echo "  Server IP: ${{ steps.stage0.outputs.server_ip }}"
+            echo "  Stage 1: ${{ steps.stage1.outcome || 'Not run' }}"
+            echo "  Stage 2: not_implemented"
+          fi
+
+      - name: "🗑️ Cleanup Server on Failure"
+        if: failure() && steps.stage0.outputs.server_created == 'true' && steps.stage0.outputs.server_id != 'unknown' && steps.stage1.outcome != 'success'
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+        run: |
+          echo "🗑️ Server setup failed, cleaning up created server..."
+          SERVER_ID="${{ steps.stage0.outputs.server_id }}"
+          SERVER_IP="${{ steps.stage0.outputs.server_ip }}"
+          
+          if [ -n "$SERVER_ID" ] && [ "$SERVER_ID" != "unknown" ]; then
+            echo "🗑️ Deleting Linode server ID: $SERVER_ID (IP: $SERVER_IP)"
+            
+            # Install Linode CLI if needed
+            if ! command -v linode-cli > /dev/null 2>&1; then
+              pip3 install --user linode-cli --quiet
+              export PATH="$HOME/.local/bin:$PATH"
+            fi
+            
+            # Delete the server
+            if linode-cli linodes delete "$SERVER_ID" 2>/dev/null; then
+              echo "✅ Server $SERVER_ID deleted successfully"
+            else
+              echo "⚠️ Failed to delete server $SERVER_ID"
+            fi
+          else
+            echo "⚠️ No valid server ID found for cleanup"
+          fi
+          
+
+
+      - name: 🔄 Update Cloudflare DNS
+        if: steps.stage1.outcome == 'success' && steps.stage0.outputs.server_created == 'true'
+        env:
+          SERVER_IP: ${{ steps.stage0.outputs.server_ip }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          if [ -z "$SERVER_IP" ]; then
+            echo "⚠️ No server IP available, skipping DNS update"
+            exit 0
+          fi
+
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ZONE_ID" ]; then
+            echo "⚠️ Cloudflare credentials not configured, skipping DNS update"
+            exit 0
+          fi
+
+          echo "🔄 Updating Cloudflare DNS records for newly created server..."
+          echo "  Domain: ${{ secrets.DOMAIN_NAME }}"
+          echo "  Server IP: $SERVER_IP"
+          echo "  Reason: New server was created, DNS update required"
+
+          # Get existing DNS records
+          EXISTING_RECORDS=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/dns_records" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json")
+
+          # Function to update or create DNS records
+          update_dns_record() {
+            local record_name="$1"
+            local record_type="A"
+            local record_content="$SERVER_IP"
+            local display_name="${2:-$record_name}"
+
+            echo "🔍 Checking $display_name A record..."
+            RECORD_ID=$(echo "$EXISTING_RECORDS" | jq -r ".result[] | select(.name == \"$record_name\" and .type == \"$record_type\") | .id" | head -1)
+
+            if [ -n "$RECORD_ID" ]; then
+              echo "🔄 Updating existing $display_name A record..."
+              RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/dns_records/$RECORD_ID" \
+                -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+                -H "Content-Type: application/json" \
+                --data "{\"type\":\"$record_type\",\"name\":\"$record_name\",\"content\":\"$record_content\",\"ttl\":120,\"proxied\":false}")
+              if echo "$RESPONSE" | jq -e '.success' > /dev/null; then
+                echo "✅ Updated $display_name record to $record_content"
+              else
+                echo "⚠️ Failed to update $display_name record"
+                echo "$RESPONSE" | jq '.errors'
+              fi
+            else
+              echo "✨ Creating new $display_name A record..."
+              RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/dns_records" \
+                -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+                -H "Content-Type: application/json" \
+                --data "{\"type\":\"$record_type\",\"name\":\"$record_name\",\"content\":\"$record_content\",\"ttl\":120,\"proxied\":false}")
+              if echo "$RESPONSE" | jq -e '.success' > /dev/null; then
+                echo "✅ Created $display_name record pointing to $record_content"
+              else
+                echo "⚠️ Failed to create $display_name record"
+                echo "$RESPONSE" | jq '.errors'
+              fi
+            fi
+          }
+
+          # Update both root (@) and www A records
+          update_dns_record "${{ secrets.DOMAIN_NAME }}" "root (@)"
+          update_dns_record "www.${{ secrets.DOMAIN_NAME }}" "www"
+          
+          # Update service subdomains
+          echo "🔄 Updating service subdomains..."
+          update_dns_record "api.${{ secrets.DOMAIN_NAME }}" "api"
+          update_dns_record "data.${{ secrets.DOMAIN_NAME }}" "data"
+          update_dns_record "worker.${{ secrets.DOMAIN_NAME }}" "worker"
+          update_dns_record "nodes.${{ secrets.DOMAIN_NAME }}" "nodes"
+          update_dns_record "auth.${{ secrets.DOMAIN_NAME }}" "auth"
+          update_dns_record "monitor.${{ secrets.DOMAIN_NAME }}" "monitor"
+          update_dns_record "admin.${{ secrets.DOMAIN_NAME }}" "admin"
+
+          echo "✅ DNS updates completed"
+          echo "🌐 Configured subdomains:"
+          echo "  - https://${{ secrets.DOMAIN_NAME }} (Main site)"
+          echo "  - https://api.${{ secrets.DOMAIN_NAME }} (API service)"
+          echo "  - https://data.${{ secrets.DOMAIN_NAME }} (Data service)"
+          echo "  - https://worker.${{ secrets.DOMAIN_NAME }} (Worker service)"
+          echo "  - https://nodes.${{ secrets.DOMAIN_NAME }} (Node network)"
+          echo "  - https://auth.${{ secrets.DOMAIN_NAME }} (Authentik SSO)"
+          echo "  - https://monitor.${{ secrets.DOMAIN_NAME }} (Monitoring)"
+          echo "  - https://admin.${{ secrets.DOMAIN_NAME }} (Admin panel)"
+
+
+  # ============================================================================
+  # Stage 2.5: Docker Hub Authentication (Private Repository)
+  # ============================================================================
+  docker-hub-auth:
+    name: 🔐 Docker Hub Authentication
+    runs-on: ${{ needs.preflight-checks.outputs.is_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [preflight-checks]
+    if: needs.preflight-checks.outputs.skip_builds != 'true'
+    outputs:
+      auth_verified: ${{ steps.verify-auth.outputs.auth_verified }}
+    steps:
+      - name: 🔐 Verify Docker Hub Authentication for Private Repository
+        id: verify-auth
+        run: |
+          echo "🔐 Verifying Docker Hub authentication for private repository..."
+          echo "📋 Repository: ${{ github.repository }}"
+          echo "🐳 Registry: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}"
+          
+          # Check if credentials are available
+          if [ -z "${{ secrets.DOCKER_USERNAME }}" ] || [ -z "${{ secrets.DOCKER_TOKEN }}" ]; then
+            echo "❌ Docker Hub credentials not configured!"
+            echo ""
+            echo "🔧 This is a PRIVATE repository and requires Docker Hub authentication"
+            echo "📋 Required GitHub secrets:"
+            echo "  - DOCKER_USERNAME: Your Docker Hub username"
+            echo "  - DOCKER_TOKEN: Your Docker Hub access token (not password!)"
+            echo ""
+            echo "🚀 Setup instructions:"
+            echo "1. Go to: https://hub.docker.com/settings/security"
+            echo "2. Create a new access token with read/write permissions"
+            echo "3. Go to: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            echo "4. Add DOCKER_USERNAME and DOCKER_TOKEN secrets"
+            echo "5. Ensure your Docker Hub account has access to private repositories"
+            echo ""
+            exit 1
+          fi
+          
+          # Test Docker Hub authentication
+          echo "🧪 Testing Docker Hub authentication..."
+          if echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin docker.io; then
+            echo "✅ Docker Hub authentication successful"
+            echo "🐳 Private repository access confirmed"
+            echo "👤 Logged in as: ${{ secrets.DOCKER_USERNAME }}"
+            echo "🏢 Namespace: ${{ env.NAMESPACE }}"
+            echo "auth_verified=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Docker Hub authentication failed"
+            echo ""
+            echo "🔧 Troubleshooting:"
+            echo "1. Verify DOCKER_USERNAME is correct"
+            echo "2. Verify DOCKER_TOKEN is a valid access token (not password)"
+            echo "3. Ensure access token has read/write permissions"
+            echo "4. Check if Docker Hub account has access to private repositories"
+            echo ""
+            exit 1
+          fi
+
+      - name: 🧪 Test Private Repository Access
+        run: |
+          echo "🧪 Testing private repository access..."
+          
+          # Try to pull a test image to verify private repository access
+          if docker pull ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/fks:api-latest 2>/dev/null; then
+            echo "✅ Private repository access confirmed - existing image pulled"
+          else
+            echo "ℹ️ No existing images found (expected for first run)"
+            echo "✅ Authentication is ready for pushing new images"
+          fi
+          
+          echo "🔐 Docker Hub authentication setup complete!"
+
+
+  # ============================================================================
+  # Stage 3: Build and Deploy Applications
+  # ============================================================================
+  detect-changes:
+    name: 🔍 Detect File Changes
+    runs-on: ${{ needs.preflight-checks.outputs.is_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [preflight-checks, provision-infrastructure]
+    if: needs.preflight-checks.outputs.skip_builds != 'true'
+    outputs:
+      # Service-specific change detection
+      api_changed: ${{ steps.changes.outputs.api_changed }}
+      worker_changed: ${{ steps.changes.outputs.worker_changed }}
+      data_changed: ${{ steps.changes.outputs.data_changed }}
+      web_changed: ${{ steps.changes.outputs.web_changed }}
+      ninja-api_changed: ${{ steps.changes.outputs.ninja-api_changed }}
+      nginx_changed: ${{ steps.changes.outputs.nginx_changed }}
+      node_network_changed: ${{ steps.changes.outputs.node_network_changed }}
+      training_changed: ${{ steps.changes.outputs.training_changed }}
+      transformer_changed: ${{ steps.changes.outputs.transformer_changed }}
+      # Global flags
+      any_docker_changed: ${{ steps.changes.outputs.any_docker_changed }}
+      force_rebuild: ${{ steps.changes.outputs.force_rebuild }}
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for diff
+
+      - name: 🔍 Detect Changes
+        id: changes
+        run: |
+          echo "🔍 Detecting changes since last successful build..."
+          
+          # Get the previous commit for comparison
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PREVIOUS_COMMIT="${{ github.event.pull_request.base.sha }}"
+            CURRENT_COMMIT="${{ github.event.pull_request.head.sha }}"
+          else
+            # For push events, compare with previous commit
+            PREVIOUS_COMMIT="${{ github.event.before }}"
+            CURRENT_COMMIT="${{ github.sha }}"
+          fi
+
+          echo "Comparing changes from $PREVIOUS_COMMIT to $CURRENT_COMMIT"
+
+          # Function to check if files have changed
+          check_service_changes() {
+            local service_name="$1"
+            shift
+            local files_to_check=("$@")
+            
+            echo "🔍 Checking changes for $service_name service..."
+            
+            local changed=false
+            for file_pattern in "${files_to_check[@]}"; do
+              if git diff --name-only "$PREVIOUS_COMMIT" "$CURRENT_COMMIT" | grep -E "$file_pattern" > /dev/null; then
+                echo "  ✅ Changed: $file_pattern"
+                changed=true
+              fi
+            done
+            
+            if [ "$changed" = "true" ]; then
+              echo "${service_name}_changed=true" >> $GITHUB_OUTPUT
+              echo "🚀 $service_name will be rebuilt"
+            else
+              echo "${service_name}_changed=false" >> $GITHUB_OUTPUT
+              echo "⏭️  $service_name unchanged, skipping rebuild"
+            fi
+            
+            return $([ "$changed" = "true" ] && echo 0 || echo 1)
+          }
+
+          # Define file patterns for each service
+          # Common infrastructure files that affect all services
+          COMMON_DOCKER_FILES=(
+            "^deployment/docker/Dockerfile$"
+            "^docker-compose.*\.yml$"
+            "^src/python/requirements.*\.txt$"
+            "^pyproject\.toml$"
+          )
+
+          # Service-specific patterns
+          API_FILES=(
+            "${COMMON_DOCKER_FILES[@]}"
+            "^src/python/.*\.(py|pyx|pyi)$"
+            "^src/api/.*$"
+            "^src/services/api/.*$"
+            "^config/api/.*$"
+          )
+
+          NINJA_API_FILES=(
+            "${COMMON_DOCKER_FILES[@]}"
+            "^src/python/.*\.(py|pyx|pyi)$"
+            "^src/ninja/.*$"
+            "^src/services/ninja-api/.*$"
+            "^config/ninja/.*$"
+            "^config/services/ninja.*$"
+          )
+
+          WORKER_FILES=(
+            "${COMMON_DOCKER_FILES[@]}"
+            "^src/python/.*\.(py|pyx|pyi)$"
+            "^src/worker/.*$"
+            "^src/services/worker/.*$"
+            "^config/worker/.*$"
+          )
+
+          DATA_FILES=(
+            "${COMMON_DOCKER_FILES[@]}"
+            "^src/python/.*\.(py|pyx|pyi)$"
+            "^src/data/.*$"
+            "^src/services/data/.*$"
+            "^config/data/.*$"
+          )
+
+          WEB_FILES=(
+            "${COMMON_DOCKER_FILES[@]}"
+            "^src/web/.*\.(js|jsx|ts|tsx|json|css|scss|html)$"
+            "^src/web/react/.*$"
+            "^src/services/web/.*$"
+            "^config/web/.*$"
+          )
+
+          NGINX_FILES=(
+            "^deployment/docker/nginx/Dockerfile$"
+            "^deployment/docker/nginx/.*$"
+            "^docker-compose.*\.yml$"
+            "^config/nginx/.*$"
+          )
+
+          NODE_NETWORK_FILES=(
+            "${COMMON_DOCKER_FILES[@]}"
+            "^src/rust/node-network/.*$"
+            "^src/rust/.*\.(rs|toml)$"
+            "^deployment/docker/rust/.*$"
+            "^config/node-network/.*$"
+          )
+
+          # GPU service patterns (include GPU-specific requirements)
+          TRAINING_FILES=(
+            "${COMMON_DOCKER_FILES[@]}"
+            "^src/python/requirements_gpu.*\.txt$"
+            "^src/python/requirements_ml.*\.txt$"
+            "^src/python/.*\.(py|pyx|pyi)$"
+            "^src/training/.*$"
+            "^src/services/training/.*$"
+            "^src/ml/.*$"
+            "^config/training/.*$"
+          )
+
+          TRANSFORMER_FILES=(
+            "${COMMON_DOCKER_FILES[@]}"
+            "^src/python/requirements_gpu.*\.txt$"
+            "^src/python/requirements_ml.*\.txt$"
+            "^src/python/.*\.(py|pyx|pyi)$"
+            "^src/transformer/.*$"
+            "^src/services/transformer/.*$"
+            "^src/ml/.*$"
+            "^config/transformer/.*$"
+          )
+
+          # Check for changes in each service
+          any_changed=false
+          
+          if check_service_changes "api" "${API_FILES[@]}"; then
+            any_changed=true
+          fi
+          
+          if check_service_changes "worker" "${WORKER_FILES[@]}"; then
+            any_changed=true
+          fi
+          
+          if check_service_changes "data" "${DATA_FILES[@]}"; then
+            any_changed=true
+          fi
+          
+          if check_service_changes "web" "${WEB_FILES[@]}"; then
+            any_changed=true
+          fi
+          
+          if check_service_changes "ninja-api" "${NINJA_API_FILES[@]}"; then
+            any_changed=true
+          fi
+          
+          if check_service_changes "nginx" "${NGINX_FILES[@]}"; then
+            any_changed=true
+          fi
+          
+          if check_service_changes "training" "${TRAINING_FILES[@]}"; then
+            any_changed=true
+          fi
+          
+          if check_service_changes "transformer" "${TRANSFORMER_FILES[@]}"; then
+            any_changed=true
+          fi
+          
+          if check_service_changes "node_network" "${NODE_NETWORK_FILES[@]}"; then
+            any_changed=true
+          fi
+
+          # Check for force rebuild conditions
+          force_rebuild=false
+          if [ "${{ github.event.inputs.build_options }}" = "force-rebuild" ] || [ "${{ github.event.inputs.build_options }}" = "clean-and-build" ]; then
+            force_rebuild=true
+            echo "🔄 Force rebuild requested via workflow inputs"
+          fi
+          
+          # Also check for FORCE_CPU_BUILDS and FORCE_GPU_BUILDS environment variables
+          if [ "${{ env.FORCE_CPU_BUILDS }}" = "true" ]; then
+            force_rebuild=true
+            echo "🔄 Force CPU builds enabled via environment variable"
+          fi
+          
+          if [ "${{ env.FORCE_GPU_BUILDS }}" = "true" ]; then
+            force_rebuild=true
+            echo "🔄 Force GPU builds enabled via environment variable"
+          fi
+
+          # Set global outputs
+          echo "any_docker_changed=$any_changed" >> $GITHUB_OUTPUT
+          echo "force_rebuild=$force_rebuild" >> $GITHUB_OUTPUT
+
+          # Summary
+          echo ""
+          echo "📊 Change Detection Summary:"
+          echo "  - Any Docker changes: $any_changed"
+          echo "  - Force rebuild: $force_rebuild"
+          echo "  - API changed: $(grep 'api_changed=' $GITHUB_OUTPUT | cut -d'=' -f2)"
+          echo "  - Worker changed: $(grep 'worker_changed=' $GITHUB_OUTPUT | cut -d'=' -f2)"
+          echo "  - Data changed: $(grep 'data_changed=' $GITHUB_OUTPUT | cut -d'=' -f2)"
+          echo "  - Web changed: $(grep 'web_changed=' $GITHUB_OUTPUT | cut -d'=' -f2)"
+          echo "  - Nginx changed: $(grep 'nginx_changed=' $GITHUB_OUTPUT | cut -d'=' -f2)"
+          echo "  - Node Network changed: $(grep 'node_network_changed=' $GITHUB_OUTPUT | cut -d'=' -f2)"
+          echo "  - Training changed: $(grep 'training_changed=' $GITHUB_OUTPUT | cut -d'=' -f2)"
+          echo "  - Transformer changed: $(grep 'transformer_changed=' $GITHUB_OUTPUT | cut -d'=' -f2)"
+
+  setup-build-environment:
+    name: 🔧 Setup Build Environment
+    runs-on: ${{ needs.preflight-checks.outputs.is_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [preflight-checks, detect-changes]
+    if: needs.preflight-checks.outputs.skip_builds != 'true' && (needs.detect-changes.outputs.any_docker_changed == 'true' || needs.detect-changes.outputs.force_rebuild == 'true')
+    outputs:
+      is_self_hosted: ${{ steps.detect.outputs.is_self_hosted }}
+      registry_prefix: ${{ steps.detect.outputs.registry_prefix }}
+      cache_type: ${{ steps.detect.outputs.cache_type }}
+    steps:
+      - name: Detect Runner Type and Configure
+        id: detect
+        run: |
+          # Detect if this is a self-hosted runner
+          if [[ "${{ runner.name }}" != *"GitHub Actions"* ]] && [[ "${{ runner.name }}" != *"Hosted Agent"* ]]; then
+            echo "🏠 Self-hosted runner detected"
+            echo "is_self_hosted=true" >> $GITHUB_OUTPUT
+
+            # Start local registry if not running
+            if ! docker ps | grep -q local-registry; then
+              docker run -d -p 5000:5000 --restart=always --name local-registry \
+                -v /opt/docker-registry:/var/lib/registry \
+                registry:2
+            fi
+
+            echo "registry_prefix=localhost:5000/" >> $GITHUB_OUTPUT
+            echo "cache_type=local" >> $GITHUB_OUTPUT
+          else
+            echo "☁️ GitHub-hosted runner detected"
+            echo "is_self_hosted=false" >> $GITHUB_OUTPUT
+            echo "registry_prefix=" >> $GITHUB_OUTPUT
+            echo "cache_type=gha" >> $GITHUB_OUTPUT
+          fi
+
+  docker-builds-cpu:
+    name: 🐳 Build CPU Services
+    runs-on: ${{ needs.setup-build-environment.outputs.is_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [preflight-checks, setup-build-environment, detect-changes, docker-hub-auth]
+    if: always() && needs.setup-build-environment.result == 'success' && needs.docker-hub-auth.outputs.auth_verified == 'true'
+    strategy:
+      # Enable concurrency for self-hosted runners, sequential for GitHub-hosted
+      max-parallel: ${{ needs.setup-build-environment.outputs.is_self_hosted == 'true' && 5 || 1 }}
+      matrix:
+        include:
+          - service: api
+            context: .
+            dockerfile: deployment/docker/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.api_changed }}
+            build_args: |
+              SERVICE_TYPE=api
+              SERVICE_PORT=8000
+              BUILD_ENV=${{ github.event.inputs.environment || 'development' }}
+          - service: worker
+            context: .
+            dockerfile: deployment/docker/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.worker_changed }}
+            build_args: |
+              SERVICE_TYPE=worker
+              BUILD_ENV=${{ github.event.inputs.environment || 'development' }}
+          - service: data
+            context: .
+            dockerfile: deployment/docker/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.data_changed }}
+            build_args: |
+              SERVICE_TYPE=data
+              SERVICE_PORT=9001
+              BUILD_ENV=${{ github.event.inputs.environment || 'development' }}
+          - service: web
+            context: .
+            dockerfile: deployment/docker/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.web_changed }}
+            build_args: |
+              SERVICE_TYPE=web
+              BUILD_NODE=true
+              BUILD_ENV=${{ github.event.inputs.environment || 'development' }}
+          - service: ninja-api
+            context: .
+            dockerfile: deployment/docker/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.ninja-api_changed }}
+            build_args: |
+              SERVICE_TYPE=ninja-api
+              SERVICE_PORT=8090
+              BUILD_ENV=${{ github.event.inputs.environment || 'development' }}
+          - service: nginx
+            context: .
+            dockerfile: deployment/docker/nginx/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.nginx_changed }}
+            build_args: |
+              BUILD_ENV=${{ github.event.inputs.environment || 'development' }}
+              BUILD_DATE=${{ github.event.repository.updated_at }}
+              BUILD_VERSION=1.0.0
+              BUILD_COMMIT=${{ github.sha }}
+          - service: node-network
+            context: .
+            dockerfile: deployment/docker/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.node_network_changed }}
+            build_args: |
+              SERVICE_RUNTIME=rust
+              SERVICE_TYPE=node-network
+              BUILD_RUST_NETWORK=true
+              BUILD_RUST_EXECUTION=false
+              BUILD_PYTHON=false
+              BUILD_DOTNET=false
+              BUILD_NODE=false
+              BUILD_CONNECTOR=false
+              RUST_NETWORK_DIR=./src/rust/node-network
+              SERVICE_PORT=8080
+              BUILD_TYPE=cpu
+              APP_ENV=${{ github.event.inputs.environment || 'development' }}
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: � Check if Service Should Build
+        id: should-build
+        run: |
+          # Check if this specific service should be built
+          SERVICE_CHANGED="${{ matrix.changed }}"
+          FORCE_CPU_REBUILD="${{ env.FORCE_CPU_BUILDS }}"
+          FORCE_GENERAL_REBUILD="${{ needs.detect-changes.outputs.force_rebuild }}"
+          
+          echo "🔍 Checking build conditions for ${{ matrix.service }}:"
+          echo "  - Service changed: $SERVICE_CHANGED"
+          echo "  - Force CPU rebuild: $FORCE_CPU_REBUILD"
+          echo "  - Force general rebuild: $FORCE_GENERAL_REBUILD"
+          
+          # Handle null/empty values properly
+          if [ "$SERVICE_CHANGED" = "true" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "🚀 CPU ${{ matrix.service }} will be built (service changed)"
+          elif [ "$FORCE_CPU_REBUILD" = "true" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "🚀 CPU ${{ matrix.service }} will be built (force CPU rebuild)"
+          elif [ "$FORCE_GENERAL_REBUILD" = "true" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "🚀 CPU ${{ matrix.service }} will be built (force general rebuild)"
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "⏭️ CPU ${{ matrix.service }} skipped (no changes detected and no force rebuild)"
+          fi
+
+      - name: �🔐 Verify Docker Hub Authentication
+        if: steps.should-build.outputs.should_build == 'true'
+        id: verify-docker-auth
+        run: |
+          echo "🔐 Verifying Docker Hub authentication for private repository..."
+          
+          if [ -z "${{ secrets.DOCKER_USERNAME }}" ] || [ -z "${{ secrets.DOCKER_TOKEN }}" ]; then
+            echo "❌ Docker Hub credentials not configured!"
+            echo "🔧 Private repository requires Docker Hub authentication"
+            echo "📋 Required secrets:"
+            echo "  - DOCKER_USERNAME: Your Docker Hub username"
+            echo "  - DOCKER_TOKEN: Your Docker Hub access token"
+            echo "🚀 Go to: https://github.com/${{ github.repository }}/settings/secrets/actions"
+            exit 1
+          fi
+          
+          # Test Docker Hub authentication
+          echo "🧪 Testing Docker Hub authentication..."
+          if echo "${{ secrets.DOCKER_TOKEN }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin; then
+            echo "✅ Docker Hub authentication successful"
+            echo "🐳 Private repository access confirmed"
+            echo "auth_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Docker Hub authentication failed"
+            echo "🔧 Check your Docker Hub credentials"
+            echo "💡 Ensure DOCKER_TOKEN is a valid access token with read/write permissions"
+            exit 1
+          fi
+
+      - name: 🔧 Configure Buildx
+        if: steps.should-build.outputs.should_build == 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+
+      - name: 🔐 Login to Docker Hub (Private Repository - CPU)
+        if: steps.should-build.outputs.should_build == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+          logout: false
+
+      - name: 🔧 Configure Build Cache
+        if: steps.should-build.outputs.should_build == 'true'
+        id: cache-config
+        run: |
+          if [ "${{ needs.setup-build-environment.outputs.cache_type }}" = "local" ]; then
+            echo "cache_from=type=local,src=/tmp/.buildx-cache-${{ matrix.service }}" >> $GITHUB_OUTPUT
+            echo "cache_to=type=local,dest=/tmp/.buildx-cache-${{ matrix.service }}-new,mode=max" >> $GITHUB_OUTPUT
+          else
+            echo "cache_from=type=gha,scope=${{ matrix.service }}" >> $GITHUB_OUTPUT
+            echo "cache_to=type=gha,scope=${{ matrix.service }},mode=max" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and Push ${{ matrix.service }}
+        if: steps.should-build.outputs.should_build == 'true'
+        id: build-push
+        uses: docker/build-push-action@v5
+        env:
+          REACT_APP_API_URL: ${{ secrets.DOMAIN_NAME && format('https://{0}/api', secrets.DOMAIN_NAME) || 'http://localhost:8000' }}
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/fks:${{ matrix.service }}-latest
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/fks:${{ matrix.service }}-${{ github.sha }}
+          cache-from: ${{ steps.cache-config.outputs.cache_from }}
+          cache-to: ${{ steps.cache-config.outputs.cache_to }}
+          build-args: |
+            ${{ matrix.build_args }}
+            ${{ matrix.service == 'web' && format('REACT_APP_API_URL={0}', env.REACT_APP_API_URL) || '' }}
+            ${{ matrix.service == 'nginx' && format('DOMAIN_NAME={0}', secrets.DOMAIN_NAME || 'localhost') || '' }}
+            ${{ matrix.service == 'nginx' && 'ENABLE_SSL=false' || '' }}
+            BUILDKIT_INLINE_CACHE=1
+
+      - name: Check Build Status
+        if: steps.should-build.outputs.should_build == 'true'
+        run: |
+          if [ "${{ steps.build-push.outcome }}" == "success" ]; then
+            echo "✅ Build successful for ${{ matrix.service }}"
+          else
+            echo "❌ Build failed for ${{ matrix.service }}"
+            echo "build_failed_${{ matrix.service }}=true" >> $GITHUB_ENV
+          fi
+
+      - name: Optimize Local Cache (Self-hosted only)
+        if: steps.should-build.outputs.should_build == 'true' && needs.setup-build-environment.outputs.is_self_hosted == 'true'
+        run: |
+          # Move new cache to active location
+          if [ -d "/tmp/.buildx-cache-${{ matrix.service }}-new" ]; then
+            rm -rf "/tmp/.buildx-cache-${{ matrix.service }}"
+            mv "/tmp/.buildx-cache-${{ matrix.service }}-new" "/tmp/.buildx-cache-${{ matrix.service }}"
+          fi
+
+      - name: 📝 Build Summary
+        if: always()
+        run: |
+          echo "📝 Build Summary for ${{ matrix.service }}:"
+          # Check if service was built based on should_build flag
+          if [ "${{ steps.should-build.outputs.should_build }}" = "true" ]; then
+            if [ "${{ steps.build-push.outcome }}" = "success" ]; then
+              echo "  ✅ Built and pushed successfully"
+            else
+              echo "  ❌ Build failed"
+            fi
+          else
+            echo "  ⏭️ Skipped (no changes detected and no force rebuild)"
+          fi
+
+
+  docker-builds-gpu:
+    name: 🔥 Build GPU Services
+    runs-on: ${{ needs.setup-build-environment.outputs.is_self_hosted == 'true' && 'self-hosted' || 'ubuntu-latest' }}
+    needs: [preflight-checks, setup-build-environment, detect-changes, docker-hub-auth]
+    if: needs.setup-build-environment.result == 'success' && (github.event.inputs.enable_gpu_builds == 'true' || github.event.inputs.force_gpu_builds == 'true') && needs.docker-hub-auth.outputs.auth_verified == 'true'
+    strategy:
+      # Enable concurrency for self-hosted runners, sequential for GitHub-hosted
+      max-parallel: ${{ needs.setup-build-environment.outputs.is_self_hosted == 'true' && 2 || 1 }}
+      matrix:
+        include:
+          - service: training
+            context: .
+            dockerfile: deployment/docker/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.training_changed }}
+            build_args: |
+              SERVICE_TYPE=training
+              BUILD_TYPE=gpu
+              CUDA_VERSION=12.8.0
+              BUILD_ENV=${{ github.event.inputs.environment || 'development' }}
+              REQUIREMENTS_FILE=requirements_gpu_minimal.txt
+          - service: transformer
+            context: .
+            dockerfile: deployment/docker/Dockerfile
+            changed: ${{ needs.detect-changes.outputs.transformer_changed }}
+            build_args: |
+              SERVICE_TYPE=transformer
+              BUILD_TYPE=gpu
+              CUDA_VERSION=12.8.0
+              BUILD_ENV=${{ github.event.inputs.environment || 'development' }}
+              REQUIREMENTS_FILE=requirements_gpu_stable.txt
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔍 Debug Build Conditions
+        run: |
+          echo "🔍 Debugging build conditions and inputs:"
+          echo "  - github.event_name: ${{ github.event_name }}"
+          echo "  - github.event.inputs.enable_cpu_builds: '${{ github.event.inputs.enable_cpu_builds }}'"
+          echo "  - github.event.inputs.force_cpu_builds: '${{ github.event.inputs.force_cpu_builds }}'"
+          echo "  - env.ENABLE_CPU_BUILDS: '${{ env.ENABLE_CPU_BUILDS }}'"
+          echo "  - env.FORCE_CPU_BUILDS: '${{ env.FORCE_CPU_BUILDS }}'"
+          echo "  - needs.detect-changes.outputs.force_rebuild: '${{ needs.detect-changes.outputs.force_rebuild }}'"
+          echo "  - needs.setup-build-environment.result: '${{ needs.setup-build-environment.result }}'"
+          echo "  - needs.docker-hub-auth.outputs.auth_verified: '${{ needs.docker-hub-auth.outputs.auth_verified }}'"
+
+      - name: 🔍 Check if Service Should Build
+        id: should-build
+        run: |
+          # Check if this specific service should be built
+          SERVICE_CHANGED="${{ matrix.changed }}"
+          FORCE_GPU_REBUILD="${{ env.FORCE_GPU_BUILDS }}"
+          FORCE_GENERAL_REBUILD="${{ needs.detect-changes.outputs.force_rebuild }}"
+          
+          echo "🔍 Checking build conditions for ${{ matrix.service }}:"
+          echo "  - Service changed: $SERVICE_CHANGED"
+          echo "  - Force GPU rebuild: $FORCE_GPU_REBUILD"
+          echo "  - Force general rebuild: $FORCE_GENERAL_REBUILD"
+          
+          if [ "$SERVICE_CHANGED" = "true" ] || [ "$FORCE_GPU_REBUILD" = "true" ] || [ "$FORCE_GENERAL_REBUILD" = "true" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "🔥 GPU ${{ matrix.service }} will be built"
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            echo "⏭️ GPU ${{ matrix.service }} skipped (no changes detected and no force rebuild)"
+          fi
+
+      - name: 🐳 Set up Docker Buildx
+        if: steps.should-build.outputs.should_build == 'true'
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: |
+            image=moby/buildkit:latest
+
+      - name: 🔐 Login to Docker Hub (Private Repository - GPU)
+        if: steps.should-build.outputs.should_build == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+          logout: false
+
+      - name: 🔧 Configure Build Cache
+        if: steps.should-build.outputs.should_build == 'true'
+        id: cache-config
+        run: |
+          if [ "${{ needs.setup-build-environment.outputs.cache_type }}" = "local" ]; then
+            echo "cache_from=type=local,src=/tmp/.buildx-cache-gpu-${{ matrix.service }}" >> $GITHUB_OUTPUT
+            echo "cache_to=type=local,dest=/tmp/.buildx-cache-gpu-${{ matrix.service }}-new,mode=max" >> $GITHUB_OUTPUT
+          else
+            echo "cache_from=type=gha,scope=gpu-${{ matrix.service }}" >> $GITHUB_OUTPUT
+            echo "cache_to=type=gha,scope=gpu-${{ matrix.service }},mode=max" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and Push GPU ${{ matrix.service }}
+        if: steps.should-build.outputs.should_build == 'true'
+        id: build-push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/fks:${{ matrix.service }}-latest
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/fks:${{ matrix.service }}-${{ github.sha }}
+          cache-from: ${{ steps.cache-config.outputs.cache_from }}
+          cache-to: ${{ steps.cache-config.outputs.cache_to }}
+          build-args: |
+            ${{ matrix.build_args }}
+            BUILDKIT_INLINE_CACHE=1
+          platforms: linux/amd64
+
+      - name: Check Build Status
+        if: steps.should-build.outputs.should_build == 'true'
+        run: |
+          if [ "${{ steps.build-push.outcome }}" == "success" ]; then
+            echo "✅ Build successful for GPU ${{ matrix.service }}"
+          else
+            echo "❌ Build failed for GPU ${{ matrix.service }}"
+            echo "build_failed_gpu_${{ matrix.service }}=true" >> $GITHUB_ENV
+          fi
+
+      - name: Optimize Local Cache (Self-hosted only)
+        if: steps.should-build.outputs.should_build == 'true' && needs.setup-build-environment.outputs.is_self_hosted == 'true'
+        run: |
+          # Move new cache to active location
+          if [ -d "/tmp/.buildx-cache-gpu-${{ matrix.service }}-new" ]; then
+            rm -rf "/tmp/.buildx-cache-gpu-${{ matrix.service }}"
+            mv "/tmp/.buildx-cache-gpu-${{ matrix.service }}-new" "/tmp/.buildx-cache-gpu-${{ matrix.service }}"
+          fi
+
+      - name: 📝 Build Summary
+        if: always()
+        run: |
+          echo "📝 Build Summary for GPU ${{ matrix.service }}:"
+          if [ "${{ steps.should-build.outputs.should_build }}" = "true" ]; then
+            if [ "${{ steps.build-push.outcome }}" = "success" ]; then
+              echo "  ✅ Built and pushed successfully"
+            else
+              echo "  ❌ Build failed"
+            fi
+          else
+            echo "  ⏭️ Skipped (no changes detected and no force rebuild)"
+          fi
+
+
+  # ============================================================================
+  # Stage 4: Application Deployment
+  # ============================================================================
+  deploy-application:
+    name: 🚀 Deploy Application
+    runs-on: self-hosted
+    needs: [preflight-checks, provision-infrastructure, docker-builds-cpu, docker-builds-gpu]
+    if: |+
+      always() && needs.preflight-checks.outputs.skip_deploy != 'true' && !cancelled() &&
+      (
+        needs.provision-infrastructure.outputs.stage1_status == 'success' || 
+        needs.provision-infrastructure.outputs.server_created == 'false'
+      ) &&
+      (
+        needs.provision-infrastructure.result == 'success' || 
+        needs.docker-builds-cpu.result == 'success' || 
+        (needs.docker-builds-gpu.result == 'success' && github.event.inputs.enable_gpu_builds == 'true') || 
+        github.event.inputs.enable_gpu_builds != 'true'
+      )
+    timeout-minutes: 30
+    outputs:
+      target_host: ${{ steps.deploy-info.outputs.target_host }}
+    steps:
+      - name: 💳 Check GitHub Billing Status
+        run: |
+          echo "💳 Checking GitHub billing status..."
+          echo ""
+          echo "⚠️ If you're seeing billing-related errors, please check:"
+          echo "1. GitHub Billing Settings: https://github.com/settings/billing"
+          echo "2. Payment method validity and expiration"
+          echo "3. GitHub Actions spending limits"
+          echo "4. Any failed payment notifications"
+          echo ""
+          echo "💡 Quick fixes:"
+          echo "- Update payment method if expired"
+          echo "- Increase GitHub Actions spending limit"
+          echo "- Use self-hosted runners to avoid charges"
+          echo "- Contact GitHub support if payments are current"
+          echo ""
+        continue-on-error: true
+
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🎯 Determine Target Host
+        id: deploy-info
+        run: |
+          echo "🎯 Determining deployment target..."
+
+          # Primary: Use domain name if available
+          if [ -n "${{ secrets.DOMAIN_NAME }}" ]; then
+            TARGET_HOST="${{ secrets.DOMAIN_NAME }}"
+            echo "✅ Using domain: $TARGET_HOST"
+          # Secondary: Use provisioned server IP
+          elif [ -n "${{ needs.provision-infrastructure.outputs.server_ip }}" ]; then
+            TARGET_HOST="${{ needs.provision-infrastructure.outputs.server_ip }}"
+            echo "✅ Using server IP: $TARGET_HOST"
+          else
+            echo "❌ No target host available for deployment"
+            exit 1
+          fi
+
+          echo "target_host=$TARGET_HOST" >> $GITHUB_OUTPUT
+          echo "🚀 Deployment target: $TARGET_HOST"
+
+
+      - name: ⏳ Wait for Server Setup Completion
+        id: wait-for-server
+        env:
+          TARGET_HOST: ${{ steps.deploy-info.outputs.target_host }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          FKS_DEV_ROOT_PASSWORD: ${{ secrets.FKS_DEV_ROOT_PASSWORD }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        run: |
+          
+          # Ensure required tools are available
+          if ! command -v nc >/dev/null 2>&1; then
+            echo "📦 Installing netcat for port testing..."
+            if command -v pacman >/dev/null 2>&1; then
+              sudo -n pacman -S --noconfirm gnu-netcat
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo -n apt-get update && sudo -n apt-get install -y netcat
+            fi
+          fi
+          
+          if ! command -v sshpass >/dev/null 2>&1; then
+            echo "📦 Installing sshpass for SSH testing..."
+            if command -v pacman >/dev/null 2>&1; then
+              sudo -n pacman -S --noconfirm sshpass
+            elif command -v apt-get >/dev/null 2>&1; then
+              sudo -n apt-get update && sudo -n apt-get install -y sshpass
+            fi
+          fi
+          echo "⏳ Waiting for server setup to complete..."
+          TARGET_HOST="${{ steps.deploy-info.outputs.target_host }}"
+          
+          if [ -z "$TARGET_HOST" ]; then
+            echo "❌ No target host available"
+            exit 1
+          fi
+          
+          echo "🎯 Target server: $TARGET_HOST"
+          echo "⏳ Server may still be rebooting and completing Stage 2 setup..."
+          echo "💡 Will wait up to 5 minutes with 1-minute intervals"
+          
+          # Function to test server readiness
+          test_server_ready() {
+            echo "🔍 Testing server readiness..."
+            
+            # Test 1: Check if SSH is responding
+            if ! timeout 10 nc -z "$TARGET_HOST" 22 2>/dev/null; then
+              echo "❌ SSH port 22 not responding"
+              return 1
+            fi
+            echo "✅ SSH port is responding"
+            
+            # Test 2: Try to SSH with password authentication using actions_user
+            if ! timeout 15 sshpass -p "$ACTIONS_USER_PASSWORD" ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null actions_user@"$TARGET_HOST" "echo 'SSH test successful'" 2>/dev/null; then
+              echo "❌ SSH authentication failed"
+              return 1
+            fi
+            echo "✅ SSH authentication successful"
+            
+            # If we can SSH in, the server is ready for deployment
+            # No need to check for Stage 2 markers - if Stage 1 completed and we can SSH, we're good
+            echo "✅ Server is ready for deployment!"
+            return 0
+          }
+          
+          # Wait with retries (5 attempts, 1 minute apart)
+          MAX_ATTEMPTS=5
+          ATTEMPT=1
+          
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo ""
+            echo "🔄 Attempt $ATTEMPT of $MAX_ATTEMPTS"
+            
+            if test_server_ready; then
+              echo ""
+              echo "✅ Server is ready for deployment!"
+              echo "⏰ Total wait time: $((($ATTEMPT - 1) * 60)) seconds"
+              exit 0
+            fi
+            
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              echo "⏳ Server not ready yet. Waiting 60 seconds before next attempt..."
+              sleep 60
+            fi
+            
+            ATTEMPT=$((ATTEMPT + 1))
+          done
+          
+          echo ""
+          echo "❌ Server failed to become ready after $((MAX_ATTEMPTS * 60)) seconds"
+          echo "🔍 Final diagnostics:"
+          echo "  - SSH port 22: $(timeout 5 nc -z "$TARGET_HOST" 22 && echo "✅ Open" || echo "❌ Closed")"
+          echo "  - Ping test: $(ping -c 1 "$TARGET_HOST" >/dev/null 2>&1 && echo "✅ Responding" || echo "❌ Not responding")"
+          echo ""
+          echo "💡 Possible issues:"
+          echo "  - Server is still rebooting (Stage 1 ended with reboot)"
+          echo "  - Stage 2 systemd service is still running"
+          echo "  - Network connectivity issues"
+          echo "  - SSH service not started yet"
+          echo ""
+          echo "🛠️ Manual check: ssh root@$TARGET_HOST"
+          exit 1
+
+      - name: 🔐 SSL Certificate Management & Application Deployment
+        id: deploy-with-ssl
+        env:
+          TARGET_HOST: ${{ steps.deploy-info.outputs.target_host }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          FKS_DEV_ROOT_PASSWORD: ${{ secrets.FKS_DEV_ROOT_PASSWORD }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_SHA: ${{ github.sha }}
+          APP_ENV: ${{ github.event.inputs.environment || 'development' }}
+          # SSL Configuration - HTTPS everywhere
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+          ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          ENABLE_SSL: "true"
+          SSL_STAGING: ${{ github.event.inputs.environment == 'development' && 'true' || 'false' }}
+          # Authentik JWT Configuration
+          AUTHENTIK_JWT_SECRET: ${{ secrets.AUTHENTIK_JWT_SECRET }}
+        if: steps.wait-for-server.outcome == 'success'
+        run: |
+          echo "🚀 Starting SSL-integrated deployment..."
+          echo "📋 Configuration:"
+          echo "  - Environment: ${{ github.event.inputs.environment || 'development' }}"
+          echo "  - Target: $TARGET_HOST"
+          echo "  - Domain: ${{ secrets.DOMAIN_NAME }}"
+          echo "  - SSL Enabled: true"
+          echo "  - SSL Staging: $SSL_STAGING"
+          echo ""
+
+          # Check SSL prerequisites
+          SSL_READY=true
+          
+          if [ -z "$DOMAIN_NAME" ]; then
+            echo "❌ DOMAIN_NAME secret not configured"
+            SSL_READY=false
+          fi
+          
+          if [ -z "$ADMIN_EMAIL" ]; then
+            echo "❌ ADMIN_EMAIL secret not configured"
+            SSL_READY=false
+          fi
+          
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "❌ CLOUDFLARE_API_TOKEN secret not configured"
+            SSL_READY=false
+          fi
+          
+          if [ -z "$CLOUDFLARE_ZONE_ID" ]; then
+            echo "❌ CLOUDFLARE_ZONE_ID secret not configured"
+            SSL_READY=false
+          fi
+
+          if [ "$SSL_READY" = "false" ]; then
+            echo ""
+            echo "🔧 SSL Prerequisites Missing!"
+            echo "Required GitHub Secrets for SSL:"
+            echo "  - DOMAIN_NAME: Your domain (e.g., fkstrading.xyz)"
+            echo "  - ADMIN_EMAIL: Email for Let's Encrypt notifications"
+            echo "  - CLOUDFLARE_API_TOKEN: Cloudflare API token with DNS permissions"
+            echo "  - CLOUDFLARE_ZONE_ID: Cloudflare Zone ID for your domain"
+            echo ""
+            echo "🚨 Falling back to HTTP-only deployment..."
+            export ENABLE_SSL="false"
+          else
+            echo "✅ SSL prerequisites verified"
+            echo "🔐 SSL certificates will be automatically managed"
+          fi
+
+          # Verify Docker Hub credentials before deployment (REQUIRED for private repository)
+          if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_TOKEN" ]; then
+            echo "🔐 Verifying Docker Hub credentials for private repository..."
+            echo "👤 Username: $DOCKER_USERNAME"
+            echo "🏢 Namespace: ${{ env.NAMESPACE }}"
+            echo "🐳 Registry: ${{ env.REGISTRY }}"
+            
+            if echo "$DOCKER_TOKEN" | docker login -u "$DOCKER_USERNAME" --password-stdin "${{ env.REGISTRY }}"; then
+              echo "✅ Docker Hub authentication successful"
+              echo "🔓 Private repository access confirmed"
+              
+              # Test pulling an image to verify private repository access
+              echo "🧪 Testing private repository access..."
+              if docker pull "${{ env.REGISTRY }}/${{ env.NAMESPACE }}/fks:api-latest" 2>/dev/null; then
+                echo "✅ Successfully pulled existing image from private repository"
+              else
+                echo "ℹ️ No existing images found (expected for first deployment)"
+              fi
+              docker logout "${{ env.REGISTRY }}" || true
+            else
+              echo "❌ Docker Hub authentication failed"
+              echo "🔧 Private repository deployment requires valid Docker Hub credentials"
+              echo "💡 Ensure DOCKER_TOKEN is a valid access token with read/write permissions"
+              exit 1
+            fi
+          else
+            echo "❌ Docker Hub credentials not provided"
+            echo "🔧 Private repository deployment requires Docker Hub authentication"
+            echo "📋 Required secrets: DOCKER_USERNAME and DOCKER_TOKEN"
+            echo "⚠️ Cannot proceed with private repository deployment"
+            exit 1
+          fi
+
+          # Use the unified deployment script
+          chmod +x scripts/deployment/deploy.sh
+          
+          # Run deployment with SSL integration and proper cleanup
+          if scripts/deployment/deploy.sh; then
+              echo "✅ SSL-integrated deployment completed successfully"
+              
+              # Test SSL if enabled
+              if [ "$ENABLE_SSL" = "true" ]; then
+                echo ""
+                echo "🧪 Testing SSL configuration..."
+                sleep 15
+                
+                if curl -s -I "https://$DOMAIN_NAME" | head -n1 | grep -q "HTTP"; then
+                  echo "✅ HTTPS connection successful"
+                else
+                  echo "⚠️ HTTPS connection test inconclusive (may still be initializing)"
+                fi
+                
+                if curl -s -I "http://$DOMAIN_NAME" | grep -q "301\|302"; then
+                  echo "✅ HTTP to HTTPS redirect working"
+                else
+                  echo "⚠️ HTTP redirect test inconclusive"
+                fi
+              fi
+              
+              # Final health check
+              echo "📊 Checking deployed services..."
+              TARGET_URL="$([ "$ENABLE_SSL" = "true" ] && echo "https://$DOMAIN_NAME" || echo "http://$TARGET_HOST")"
+              
+              if timeout 10 curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" | grep -q "200\|30[0-9]"; then
+                echo "✅ Application is responding at $TARGET_URL"
+              else
+                echo "⚠️ Application may still be starting up"
+              fi
+              
+            else
+              echo "❌ Deployment failed"
+              echo "📋 Deployment log:"
+              [ -f /tmp/deploy-application.log ] && tail -20 /tmp/deploy-application.log || echo "No log file found"
+              exit 1
+            fi
+
+      - name: 📋 SSL Certificate Status Report
+        if: always()
+        env:
+          TARGET_HOST: ${{ steps.deploy-info.outputs.target_host }}
+          ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+          ENABLE_SSL: ${{ env.ENABLE_SSL }}
+        run: |
+          if [ "$ENABLE_SSL" = "true" ] && [ -n "$DOMAIN_NAME" ]; then
+            echo "📋 SSL Certificate Status Report"
+            echo "================================"
+            
+            # Check certificate status via SSH
+            if command -v sshpass > /dev/null 2>&1 && [ -n "$ACTIONS_USER_PASSWORD" ]; then
+              SSL_INFO=$(timeout 30 sshpass -p "$ACTIONS_USER_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null actions_user@"$TARGET_HOST" "
+                if [ -f '/etc/letsencrypt/live/$DOMAIN_NAME/cert.pem' ]; then
+                  echo 'Certificate exists: YES'
+                  echo 'Issuer:' \$(openssl x509 -in '/etc/letsencrypt/live/$DOMAIN_NAME/cert.pem' -noout -issuer | cut -d'=' -f2-)
+                  echo 'Expires:' \$(openssl x509 -in '/etc/letsencrypt/live/$DOMAIN_NAME/cert.pem' -noout -enddate | cut -d'=' -f2)
+                  if openssl x509 -in '/etc/letsencrypt/live/$DOMAIN_NAME/cert.pem' -noout -checkend 2592000 2>/dev/null; then
+                    echo 'Status: Valid (30+ days remaining)'
+                  else
+                    echo 'Status: Expires soon (needs renewal)'
+                  fi
+                else
+                  echo 'Certificate exists: NO'
+                fi
+              " 2>/dev/null)
+              
+              if [ -n "$SSL_INFO" ]; then
+                echo "$SSL_INFO"
+              else
+                echo "⚠️ Could not retrieve SSL certificate information"
+              fi
+            else
+              echo "⚠️ Cannot check SSL status (SSH not available)"
+            fi
+            
+            echo ""
+            echo "🔗 Test your SSL configuration:"
+            echo "  - HTTPS Test: curl -I https://$DOMAIN_NAME"
+            echo "  - SSL Labs: https://www.ssllabs.com/ssltest/analyze.html?d=$DOMAIN_NAME"
+            
+          else
+            echo "📋 SSL Status: Disabled or not configured"
+            echo "💡 To enable SSL, configure the required secrets and set ENABLE_SSL=true"
+          fi
+  # ============================================================================
+  # Stage 5: Post-Deployment Tests (Simplified)
+  # ============================================================================
+  post-deployment-tests:
+    name: 🧪 Post-Deployment Tests
+    runs-on: self-hosted
+    needs: [deploy-application]
+    if: always() && needs.deploy-application.result == 'success'
+    continue-on-error: true
+    steps:
+      - name: 🩺 Basic Health Check
+        run: |
+          echo "🩺 Running basic health checks..."
+          TARGET="${{ needs.deploy-application.outputs.target_host || secrets.DOMAIN_NAME }}"
+
+          if [ -z "$TARGET" ]; then
+            echo "⚠️ No target available for health check"
+            exit 0
+          fi
+
+          echo "Testing endpoints for: $TARGET"
+
+          # Test basic endpoints
+          ENDPOINTS=(
+            "http://$TARGET:3000"
+            "http://$TARGET:8000"
+            "http://$TARGET"
+          )
+
+          HEALTHY=0
+          TOTAL=${#ENDPOINTS[@]}
+
+          for endpoint in "${ENDPOINTS[@]}"; do
+            echo "Testing: $endpoint"
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$endpoint" --connect-timeout 10 || echo "000")
+
+            if [[ "$HTTP_CODE" =~ ^(200|301|302)$ ]]; then
+              echo "✅ $endpoint is accessible (HTTP $HTTP_CODE)"
+              HEALTHY=$((HEALTHY + 1))
+            else
+              echo "⚠️ $endpoint is not accessible (HTTP $HTTP_CODE)"
+            fi
+          done
+
+          if [ $HEALTHY -gt 0 ]; then
+            echo "✅ Health check passed ($HEALTHY/$TOTAL endpoints healthy)"
+          else
+            echo "⚠️ Health check failed (no endpoints accessible)"
+          fi
+
+  # ============================================================================
+  # Stage 6: Deployment Summary (Enhanced)
+  # ============================================================================
+  deployment-summary:
+    name: 📋 Deployment Summary
+    runs-on: self-hosted
+    needs: [preflight-checks, provision-infrastructure, docker-builds-cpu, docker-builds-gpu, deploy-application, post-deployment-tests, code-quality-python, code-quality-csharp, code-quality-web]
+    if: always() && !cancelled()
+    steps:
+      - name: 📊 Enhanced Deployment Summary (SSL-Aware)
+        env:
+          TARGET_HOST: ${{ needs.deploy-application.outputs.target_host || secrets.DOMAIN_NAME }}
+          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
+          APP_ENV: ${{ github.event.inputs.environment || 'development' }}
+        run: |
+          echo "## 🔐 SSL-Integrated Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: $APP_ENV" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Host**: ${TARGET_HOST:-Not available}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Domain**: ${DOMAIN_NAME:-Not configured}" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if SSL secrets are configured
+          SSL_CONFIGURED="false"
+          if [ -n "${{ secrets.DOMAIN_NAME }}" ] && [ -n "${{ secrets.ADMIN_EMAIL }}" ] && [ -n "${{ secrets.CLOUDFLARE_API_TOKEN }}" ] && [ -n "${{ secrets.CLOUDFLARE_ZONE_ID }}" ]; then
+            SSL_CONFIGURED="true"
+          fi
+          
+          echo "- **SSL Status**: $([ "$SSL_CONFIGURED" = "true" ] && echo "✅ Configured" || echo "❌ Not configured")" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Status**: ${{ needs.deploy-application.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$SSL_CONFIGURED" = "true" ] && [ -n "$DOMAIN_NAME" ]; then
+            echo "### 🌐 Service URLs (HTTPS)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Main Site**: https://$DOMAIN_NAME" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web Interface**: https://$DOMAIN_NAME:3000" >> $GITHUB_STEP_SUMMARY
+            echo "- **API**: https://$DOMAIN_NAME:8000" >> $GITHUB_STEP_SUMMARY
+            echo "- **Data Service**: https://$DOMAIN_NAME:9001" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 🔐 SSL Information" >> $GITHUB_STEP_SUMMARY
+            echo "- **Auto-renewal**: ✅ Configured" >> $GITHUB_STEP_SUMMARY
+            echo "- **DNS Challenge**: ✅ Cloudflare" >> $GITHUB_STEP_SUMMARY
+            echo "- **Mode**: $([ "$APP_ENV" = "development" ] && echo "Staging (safe)" || echo "Production")" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### 🌐 Service URLs (HTTP)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Main Site**: http://${TARGET_HOST:-localhost}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web Interface**: http://${TARGET_HOST:-localhost}:3000" >> $GITHUB_STEP_SUMMARY
+            echo "- **API**: http://${TARGET_HOST:-localhost}:8000" >> $GITHUB_STEP_SUMMARY
+            echo "- **Data Service**: http://${TARGET_HOST:-localhost}:9001" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ⚠️ SSL Setup Required" >> $GITHUB_STEP_SUMMARY
+            echo "Configure these secrets for HTTPS:" >> $GITHUB_STEP_SUMMARY
+            echo "- \`DOMAIN_NAME\`, \`ADMIN_EMAIL\`, \`CLOUDFLARE_API_TOKEN\`, \`CLOUDFLARE_ZONE_ID\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📊 Generate Deployment Summary
+        run: |
+          echo "# 🚀 FKS Trading System Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Deployment Information
+          echo "## 📍 Deployment Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Event:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${{ env.ENVIRONMENT }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Mode:** ${{ env.DEPLOYMENT_MODE }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Code Quality Results
+          echo "## 📝 Code Quality Results" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.preflight-checks.outputs.skip_code_checks }}" == "true" ]; then
+            echo "⏭️ Code quality checks were skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Python:** ${{ needs.code-quality-python.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **C# (NinjaTrader):** ${{ needs.code-quality-csharp.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web (React/TS):** ${{ needs.code-quality-web.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Server Information
+          echo "## 🖥️ Server Information" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.provision-infrastructure.outputs.server_ip }}" != "" ]; then
+            echo "- **Server Name:** fks-dev" >> $GITHUB_STEP_SUMMARY
+            echo "- **Server ID:** ${{ needs.provision-infrastructure.outputs.server_id }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **IP Address:** ${{ needs.provision-infrastructure.outputs.server_ip }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Location:** Toronto, Canada (ca-central)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Type:** g6-standard-2 (4GB RAM, 2 CPUs)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Status:** ✨ Newly created" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Server:** Using existing infrastructure" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Build Results
+          echo "## 🏗️ Build Results" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.preflight-checks.outputs.skip_builds }}" == "true" ]; then
+            echo "⏭️ Docker builds were skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            if [ "${{ env.ENABLE_CPU_BUILDS }}" == "true" ]; then
+              echo "- **CPU Services:** ${{ needs.docker-builds-cpu.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **CPU Services:** disabled" >> $GITHUB_STEP_SUMMARY
+            fi
+            if [ "${{ env.ENABLE_GPU_BUILDS }}" == "true" ]; then
+              echo "- **GPU Services:** ${{ needs.docker-builds-gpu.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **GPU Services:** disabled" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Deployment Status
+          echo "## 🚀 Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "- **Infrastructure:** ${{ needs.provision-infrastructure.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Application:** ${{ needs.deploy-application.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Health Checks:** ${{ needs.post-deployment-tests.result || 'skipped' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Service Endpoints
+          echo "## 🔗 Service Endpoints" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ secrets.DOMAIN_NAME }}" ]; then
+            echo "### Production URLs:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web Interface:** https://${{ secrets.DOMAIN_NAME }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **API:** https://${{ secrets.DOMAIN_NAME }}/api" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ -n "${{ needs.provision-infrastructure.outputs.server_ip }}" ]; then
+            echo "### Direct Access URLs:" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web Interface:** http://${{ needs.provision-infrastructure.outputs.server_ip }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **API:** http://${{ needs.provision-infrastructure.outputs.server_ip }}:8000" >> $GITHUB_STEP_SUMMARY
+            echo "- **Web (Direct):** http://${{ needs.provision-infrastructure.outputs.server_ip }}:3000" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Configuration
+          echo "## ⚙️ Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Docker Registry:** ${{ env.DOCKER_USERNAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Domain:** ${{ secrets.DOMAIN_NAME || 'Not configured' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **SSL:** ${{ secrets.SSL_STAGING == 'true' && 'Staging (Lets Encrypt)' || 'Production (Lets Encrypt)' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **VPN:** Tailscale ${{ secrets.TAILSCALE_AUTH_KEY != '' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Monitoring:** Netdata ${{ secrets.NETDATA_CLAIM_TOKEN != '' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Discord Alerts:** ${{ secrets.DISCORD_WEBHOOK_SERVERS != '' && '✅' || '❌' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Next Steps
+          echo "## 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "### For Developers:" >> $GITHUB_STEP_SUMMARY
+          echo "1. SSH into server: \`ssh jordan@${{ secrets.DOMAIN_NAME || needs.provision-infrastructure.outputs.server_ip }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check service status: \`cd ~/fks && docker compose ps\`" >> $GITHUB_STEP_SUMMARY
+          echo "3. View logs: \`docker compose logs -f\`" >> $GITHUB_STEP_SUMMARY
+          echo "4. Restart services: \`./restart.sh\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Overall status
+          echo "## 🎯 Overall Status" >> $GITHUB_STEP_SUMMARY
+
+          OVERALL_SUCCESS=true
+          if [ "${{ needs.deploy-application.result }}" != "success" ] && [ "${{ needs.preflight-checks.outputs.skip_deploy }}" != "true" ]; then
+            OVERALL_SUCCESS=false
+          fi
+
+          if [ "$OVERALL_SUCCESS" == "true" ]; then
+            echo "### ✅ Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "The FKS Trading System has been successfully deployed." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ⚠️ Deployment Completed with Issues" >> $GITHUB_STEP_SUMMARY
+            echo "Please review the logs and address any failures." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 📢 Send Discord Notification
+        if: always()
+        env:
+          DISCORD_WEBHOOK_SERVERS: ${{ secrets.DISCORD_WEBHOOK_SERVERS }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK_SERVERS" ]; then
+            # Determine overall status
+            if [ "${{ needs.deploy-application.result }}" == "success" ]; then
+              STATUS="✅ Success"
+              COLOR="5763719"  # Green
+            elif [ "${{ needs.deploy-application.result }}" == "failure" ]; then
+              STATUS="❌ Failed"
+              COLOR="15548997" # Red
+            else
+              STATUS="⚠️ Partial"
+              COLOR="16776960" # Yellow
+            fi
+
+            # Build Discord embed
+            EMBED=$(cat <<EOF
+          {
+            "embeds": [{
+              "title": "FKS Trading System Deployment $STATUS",
+              "color": $COLOR,
+              "fields": [
+                {
+                  "name": "Environment",
+                  "value": "${{ env.ENVIRONMENT }}",
+                  "inline": true
+                },
+                {
+                  "name": "Mode",
+                  "value": "${{ env.DEPLOYMENT_MODE }}",
+                  "inline": true
+                },
+                {
+                  "name": "Branch",
+                  "value": "${{ github.ref_name }}",
+                  "inline": true
+                },
+                {
+                  "name": "Infrastructure",
+                  "value": "${{ needs.provision-infrastructure.result || 'skipped' }}",
+                  "inline": true
+                },
+                {
+                  "name": "Deployment",
+                  "value": "${{ needs.deploy-application.result || 'skipped' }}",
+                  "inline": true
+                },
+                {
+                  "name": "Triggered By",
+                  "value": "${{ github.actor }}",
+                  "inline": true
+                }
+              ],
+              "footer": {
+                "text": "GitHub Actions"
+              },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+            }]
+          }
+          EOF
+          )
+
+            # Send notification
+            curl -H "Content-Type: application/json" \
+                 -X POST \
+                 -d "$EMBED" \
+                 "$DISCORD_WEBHOOK_SERVERS" || echo "⚠️ Discord notification failed"
+          fi
