@@ -9,8 +9,8 @@ services:
       context: ./src/web
       dockerfile: Dockerfile
     container_name: ats-web-app
-    ports:
-      - "80:80"
+    expose:
+      - "80"
     environment:
       - NODE_ENV=production
     networks:
@@ -31,8 +31,8 @@ services:
       context: ./src/api
       dockerfile: Dockerfile
     container_name: ats-api-server
-    ports:
-      - "3001:3001"
+    expose:
+      - "3001"
     environment:
       - NODE_ENV=production
       - PORT=3001
@@ -84,10 +84,13 @@ services:
     image: nginx:alpine
     container_name: ats-nginx-proxy
     ports:
+      - "80:80"
       - "443:443"
     volumes:
       - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx-logs:/var/log/nginx
+      # Mount SSL certificates if they exist (conditional)
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
       - ats-network
     restart: unless-stopped
@@ -95,7 +98,7 @@ services:
       - ats-web
       - ats-api
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:443/nginx-health"]
+      test: ["CMD", "curl", "-f", "http://localhost:80/nginx-health"]
       interval: 30s
       timeout: 10s
       retries: 3

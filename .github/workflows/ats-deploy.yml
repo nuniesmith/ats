@@ -1107,6 +1107,20 @@ jobs:
               if [[ -f /etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem ]]; then
                 echo '✅ SSL certificates obtained successfully'
                 ls -la /etc/letsencrypt/live/$DOMAIN_NAME/
+                
+                # Restart nginx container to load SSL certificates
+                echo '🔄 Restarting nginx container to load SSL certificates...'
+                cd /opt/ats
+                docker-compose restart nginx
+                
+                # Test SSL configuration
+                echo '🔍 Testing SSL configuration...'
+                sleep 10
+                if docker exec ats-nginx-proxy nginx -t; then
+                  echo '✅ Nginx SSL configuration is valid'
+                else
+                  echo '⚠️ Nginx SSL configuration has issues, but continuing...'
+                fi
               else
                 echo '❌ SSL certificate files not found'
               fi

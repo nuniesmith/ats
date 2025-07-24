@@ -1,3 +1,11 @@
+#!/bin/bash
+# Quick fix to get ATS working on HTTP immediately
+# Run this on your server to fix the immediate SSL protocol error
+
+echo "🔧 Quick fix: Updating nginx to serve HTTP properly..."
+
+# Create a temporary nginx config that works without SSL
+cat > /tmp/nginx-http-only.conf << 'EOF'
 events {
     worker_connections 1024;
 }
@@ -36,7 +44,7 @@ http {
         server ats-api-server:3001;
     }
 
-    # HTTP server block (always available)
+    # HTTP server block
     server {
         listen 80 default_server;
         server_name _;
@@ -89,68 +97,32 @@ http {
             add_header Content-Type text/plain;
         }
     }
-
-    # HTTPS server block (conditional - only works if SSL certificates exist)
-    server {
-        listen 443 ssl http2;
-        server_name ats.7gram.xyz www.ats.7gram.xyz;
-
-        # SSL certificate paths (will only work if certificates exist)
-        ssl_certificate /etc/letsencrypt/live/ats.7gram.xyz/fullchain.pem;
-        ssl_certificate_key /etc/letsencrypt/live/ats.7gram.xyz/privkey.pem;
-
-        # SSL configuration
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384;
-        ssl_prefer_server_ciphers off;
-
-        # Security headers
-        add_header X-Frame-Options "SAMEORIGIN" always;
-        add_header X-XSS-Protection "1; mode=block" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Referrer-Policy "no-referrer-when-downgrade" always;
-        add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
-        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-
-        # Main web application
-        location / {
-            proxy_pass http://ats_web;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
-
-        # API routes
-        location /api {
-            proxy_pass http://ats_api;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection 'upgrade';
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_cache_bypass $http_upgrade;
-        }
-
-        # WebSocket proxy for Socket.IO
-        location /socket.io {
-            proxy_pass http://ats_api;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
-
-        # Health check endpoint
-        location /nginx-health {
-            access_log off;
-            return 200 "healthy\n";
-            add_header Content-Type text/plain;
-        }
-    }
 }
+EOF
+
+# Update the nginx config
+echo "📝 Updating nginx configuration..."
+cp /tmp/nginx-http-only.conf /opt/ats/config/nginx.conf
+
+# Restart nginx container
+echo "🔄 Restarting nginx container..."
+cd /opt/ats
+docker-compose restart nginx
+
+# Wait a moment
+sleep 10
+
+# Test the fix
+echo "🔍 Testing HTTP access..."
+if curl -s -f http://localhost/nginx-health >/dev/null; then
+    echo "✅ HTTP access working!"
+    echo ""
+    echo "🌐 Your site should now be accessible at:"
+    echo "   http://$(hostname -I | awk '{print $1}')"
+    echo "   http://ats.7gram.xyz (if DNS points to this server)"
+    echo ""
+    echo "⚠️ Note: This is HTTP only. For HTTPS, run the full deployment workflow"
+    echo "   or use the fix-ssl.sh script after obtaining SSL certificates."
+else
+    echo "❌ Still having issues. Check logs with: docker-compose logs nginx"
+fi
