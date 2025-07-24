@@ -884,7 +884,7 @@ jobs:
           echo "   API: ${API_IMAGE:-nuniesmith/ats:api-latest}"
           
           # Create deployment directory and subdirectories
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "mkdir -p /opt/ats/config"
+          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "mkdir -p /opt/ats/config /opt/ats/scripts"
           
           # Copy deployment files and scripts
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no docker-compose.prod.yml root@$SERVER_IP:/opt/ats/docker-compose.yml
