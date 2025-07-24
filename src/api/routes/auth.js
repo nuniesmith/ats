@@ -11,13 +11,13 @@ const users = [
   {
     id: 1,
     username: 'admin',
-    password: '$2a$10$rQZ1qF.lYGG5Bh1oXd9x5.OqXY1jY5JDY5JjY5JjY5JjY5JjY5JjY2', // 'admin123'
+    password: '$2a$10$TEliRTMWGqqoLV0TyNFSIOi2QbYJi24Wttd3OcnkbZuA1SdsZRCl2', // 'admin123'
     role: 'admin'
   },
   {
     id: 2,
     username: 'freddy',
-    password: '$2a$10$rQZ1qF.lYGG5Bh1oXd9x5.OqXY1jY5JDY5JjY5JjY5JjY5JjY5JjY2', // 'admin123'
+    password: '$2a$10$TEliRTMWGqqoLV0TyNFSIOi2QbYJi24Wttd3OcnkbZuA1SdsZRCl2', // 'admin123'
     role: 'admin'
   }
 ];

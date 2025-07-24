@@ -98,6 +98,13 @@ app.use('/api/server', authMiddleware, serverRoutes);
 app.use('/api/steam', authMiddleware, steamRoutes);
 app.use('/api/system', authMiddleware, systemRoutes);
 
+// Add dedicated players route that maps to server players
+app.use('/api/players', authMiddleware, (req, res, next) => {
+  // Redirect players requests to server/players
+  req.url = '/players' + req.url;
+  serverRoutes(req, res, next);
+});
+
 // Serve static files from React build
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../web/dist')));

@@ -22,7 +22,7 @@ export function SocketProvider({ children }) {
     // Initialize socket connection
     const newSocket = io(process.env.NODE_ENV === 'production' 
       ? 'https://ats.7gram.xyz' 
-      : 'http://localhost:4000', {
+      : window.location.origin, {
       transports: ['websocket', 'polling'],
       timeout: 20000,
       reconnection: true,
