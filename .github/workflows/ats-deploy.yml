@@ -1001,7 +1001,7 @@ jobs:
             
             # Wait for containers to be ready
             echo 'Waiting for containers to start...'
-            sleep 30
+            sleep 10
             
             # Run SSL manager to set up certificates
             echo '🔒 Setting up SSL certificates...'
@@ -1043,22 +1043,22 @@ jobs:
             
             # Wait for health checks
             echo 'Waiting for services to be healthy...'
-            for i in {1..30}; do
+            for i in {1..6}; do
               if curl -f http://localhost/nginx-health >/dev/null 2>&1; then
                 echo 'HTTP health check passed'
                 break
               fi
-              echo \"Waiting for HTTP access... (attempt \$i/30)\"
-              sleep 10
+              echo \"Waiting for HTTP access... (attempt \$i/6)\"
+              sleep 5
             done
             
-            for i in {1..30}; do
+            for i in {1..6}; do
               if curl -k -f https://localhost/nginx-health >/dev/null 2>&1; then
                 echo 'HTTPS health check passed'
                 break
               fi
-              echo \"Waiting for HTTPS access... (attempt \$i/30)\"
-              sleep 10
+              echo \"Waiting for HTTPS access... (attempt \$i/6)\"
+              sleep 5
             done
           "
 
