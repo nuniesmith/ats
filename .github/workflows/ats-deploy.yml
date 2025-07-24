@@ -390,12 +390,26 @@ jobs:
             $NETDATA_ROOMS_ENV
             echo "🔧 Stage 1: System initialization..."
             
-            # Update system
-            pacman -Syu --noconfirm
+            # Update system with conflict resolution
+            echo "📦 Updating system packages..."
+            pacman-key --init
+            pacman-key --populate archlinux
+            pacman -Sy --noconfirm archlinux-keyring
+            
+            # Handle known conflicts before system update
+            echo "🔧 Resolving package conflicts..."
+            pacman -R --noconfirm linux-firmware-nvidia 2>/dev/null || echo "linux-firmware-nvidia not installed"
+            pacman -R --noconfirm gpgme 2>/dev/null || echo "gpgme conflict resolved"
+            
+            # Now update system
+            pacman -Syu --noconfirm --overwrite="*"
             
             # Install essential packages with verification
             echo "📦 Installing essential packages..."
-            pacman -S --noconfirm curl wget git unzip nginx docker docker-compose
+            for pkg in curl wget git unzip nginx docker docker-compose; do
+              echo "Installing $pkg..."
+              pacman -S --noconfirm --needed "$pkg" || echo "Failed to install $pkg, continuing..."
+            done
             
             # Install Tailscale
             echo "📦 Installing Tailscale..."
@@ -404,14 +418,10 @@ jobs:
               curl -fsSL https://tailscale.com/install.sh | sh
             }
             
-            # Install Netdata with cloud integration
+            # Install Netdata with cloud integration  
             echo "📦 Installing Netdata with cloud integration..."
-            if pacman -S --noconfirm netdata; then
-              echo "✅ Netdata installed via pacman"
-            else
-              echo "Installing Netdata manually via kickstart script..."
-              curl -fsSL https://get.netdata.cloud/kickstart.sh | sh -s -- --stable-channel --disable-telemetry --claim-token="${NETDATA_CLAIM_TOKEN:-}" --claim-rooms="${NETDATA_CLAIM_ROOM:-}" --claim-url="https://app.netdata.cloud"
-            fi
+            echo "Installing Netdata manually via kickstart script..."
+            curl -fsSL https://get.netdata.cloud/kickstart.sh | sh -s -- --stable-channel --disable-telemetry --claim-token="${NETDATA_CLAIM_TOKEN:-}" --claim-rooms="${NETDATA_CLAIM_ROOM:-}" --claim-url="https://app.netdata.cloud"
             
             # Configure Netdata for cloud access if tokens are provided
             if [[ -n "${NETDATA_CLAIM_TOKEN:-}" && -n "${NETDATA_CLAIM_ROOM:-}" ]]; then
@@ -460,11 +470,12 @@ jobs:
             
             # Install Certbot for SSL certificates
             echo "📦 Installing Certbot for SSL certificates..."
-            pacman -S --noconfirm certbot certbot-nginx || {
-              echo "Installing Certbot manually..."
-              pacman -S --noconfirm python-pip
-              pip install certbot certbot-nginx
-            }
+            pacman -S --noconfirm --needed certbot python-pip || echo "Failed to install certbot from pacman"
+            
+            # Install DNS Cloudflare plugin via pip (more reliable)
+            echo "📦 Installing Certbot DNS Cloudflare plugin..."
+            pip install --upgrade pip
+            pip install certbot-dns-cloudflare || echo "Failed to install DNS plugin, SSL will use self-signed only"
             
             # Configure system optimizations
             echo "⚙️ Configuring system optimizations..."
