@@ -70,6 +70,8 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
+    environment:
+      - TZ=${TZ:-America/Toronto}
     networks:
       - ats-network
     restart: unless-stopped
@@ -79,7 +81,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    command: redis-server --appendonly yes
+    command: redis-server --appendonly yes --save 900 1 --save 300 10 --save 60 10000
 
   # Nginx Reverse Proxy (Optional - for SSL termination)
   nginx:

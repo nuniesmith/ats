@@ -486,6 +486,16 @@ jobs:
             echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf
             sysctl vm.overcommit_memory=1
             
+            # Verify memory overcommit setting
+            echo "🔍 Verifying memory overcommit configuration..."
+            OVERCOMMIT_VALUE=$(sysctl -n vm.overcommit_memory)
+            echo "   Current vm.overcommit_memory value: $OVERCOMMIT_VALUE"
+            if [ "$OVERCOMMIT_VALUE" = "1" ]; then
+              echo "✅ Memory overcommit properly configured for Redis"
+            else
+              echo "⚠️ Memory overcommit not set correctly, Redis may show warnings"
+            fi
+            
             # Set timezone to EST (Toronto, Canada)
             echo "🕐 Setting timezone to America/Toronto (EST)..."
             timedatectl set-timezone America/Toronto
@@ -1002,6 +1012,12 @@ jobs:
             docker version
             docker-compose version
             
+            # Verify system configuration for Redis
+            echo '🔍 Verifying system configuration for Redis:'
+            echo \"   Memory overcommit: \$(sysctl -n vm.overcommit_memory)\"
+            echo \"   Available memory: \$(free -h | grep Mem | awk '{print \$2}')\"
+            echo \"   Swap status: \$(free -h | grep Swap | awk '{print \$2}')\"
+            
             # Set up SSL certificates before starting containers
             echo '🔒 Setting up SSL certificates...'
             chmod +x scripts/ssl-manager.sh
@@ -1059,6 +1075,20 @@ jobs:
             
             echo '📝 Recent container logs:'
             docker-compose logs --tail=20
+            
+            # Test Redis functionality
+            echo '🔍 Testing Redis functionality...'
+            if docker exec ats-redis redis-cli ping >/dev/null 2>&1; then
+              echo '✅ Redis is responding to ping'
+              echo '📊 Redis info:'
+              docker exec ats-redis redis-cli info server | grep redis_version || echo 'Could not get Redis version'
+              echo '🔍 Checking Redis logs for memory overcommit warnings...'
+              REDIS_LOGS=$(docker logs ats-redis 2>&1 | grep -i "memory overcommit" | tail -3 || echo "No memory overcommit warnings found")
+              echo "   Redis memory overcommit status: $REDIS_LOGS"
+            else
+              echo '⚠️ Redis is not responding to ping'
+              docker logs ats-redis --tail=10
+            fi
             
             # Test container connectivity
             echo '🔗 Testing container network connectivity...'
