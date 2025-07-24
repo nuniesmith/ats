@@ -1,0 +1,10 @@
+[Unit]
+Description=ATS SSL Certificate Renewal
+After=network.target docker.service
+
+[Service]
+Type=oneshot
+Environment=DOMAIN_NAME=ats.7gram.xyz
+ExecStart=/opt/ats/scripts/ssl-manager.sh renew
+StandardOutput=journal
+StandardError=journal

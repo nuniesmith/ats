@@ -886,12 +886,18 @@ jobs:
           # Create deployment directory and subdirectories
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "mkdir -p /opt/ats/config"
           
-          # Copy deployment files
+          # Copy deployment files and scripts
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no docker-compose.prod.yml root@$SERVER_IP:/opt/ats/docker-compose.yml
           
-          # Copy nginx configuration
+          # Copy nginx configurations
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx.conf root@$SERVER_IP:/opt/ats/config/nginx.conf
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx-with-ssl.conf root@$SERVER_IP:/opt/ats/config/nginx-with-ssl.conf
+          
+          # Copy SSL management scripts and services
+          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no scripts/ssl-manager.sh root@$SERVER_IP:/opt/ats/scripts/ssl-manager.sh
+          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/ats-ssl-manager.service root@$SERVER_IP:/etc/systemd/system/ats-ssl-manager.service
+          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/ats-ssl-renewal.service root@$SERVER_IP:/etc/systemd/system/ats-ssl-renewal.service
+          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/ats-ssl-renewal.timer root@$SERVER_IP:/etc/systemd/system/ats-ssl-renewal.timer
           
           # Create environment file
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "cat > /opt/ats/.env << 'EOF'
@@ -966,6 +972,30 @@ jobs:
             docker version
             docker-compose version
             
+            # Set up SSL certificates before starting containers
+            echo '🔒 Setting up SSL certificates...'
+            chmod +x scripts/ssl-manager.sh
+            
+            # Create Cloudflare credentials if token is provided
+            if [[ -n '$CLOUDFLARE_API_TOKEN' ]]; then
+              mkdir -p /root/.secrets
+              cat > /root/.secrets/cloudflare.ini << 'CFEOF'
+          dns_cloudflare_api_token = $CLOUDFLARE_API_TOKEN
+          CFEOF
+              chmod 600 /root/.secrets/cloudflare.ini
+              echo '✅ Cloudflare credentials configured'
+            fi
+            
+            # Run SSL manager to set up certificates
+            ./scripts/ssl-manager.sh auto
+            
+            # Enable SSL management services
+            echo '⚙️ Setting up SSL management services...'
+            systemctl daemon-reload
+            systemctl enable ats-ssl-manager.service
+            systemctl enable ats-ssl-renewal.timer
+            systemctl start ats-ssl-renewal.timer
+            
             # Pull and start containers
             echo 'Pulling Docker images...'
             docker-compose pull
@@ -993,20 +1023,20 @@ jobs:
             # Wait for health checks
             echo 'Waiting for services to be healthy...'
             for i in {1..30}; do
-              if curl -f http://localhost/health >/dev/null 2>&1; then
-                echo 'Web app is healthy'
+              if curl -f http://localhost/nginx-health >/dev/null 2>&1; then
+                echo 'HTTP health check passed'
                 break
               fi
-              echo \"Waiting for web app... (attempt \$i/30)\"
+              echo \"Waiting for HTTP access... (attempt \$i/30)\"
               sleep 10
             done
             
             for i in {1..30}; do
-              if curl -f http://localhost:3001/health >/dev/null 2>&1; then
-                echo 'API server is healthy'
+              if curl -k -f https://localhost/nginx-health >/dev/null 2>&1; then
+                echo 'HTTPS health check passed'
                 break
               fi
-              echo \"Waiting for API server... (attempt \$i/30)\"
+              echo \"Waiting for HTTPS access... (attempt \$i/30)\"
               sleep 10
             done
           "
@@ -1061,87 +1091,6 @@ jobs:
               echo "❌ No Tailscale auth key provided"
               echo "TAILSCALE_IP=" >> $GITHUB_ENV
             fi
-          fi
-
-      - name: 🔒 Setup SSL Certificates
-        env:
-          SERVER_IP: ${{ steps.target.outputs.server-ip }}
-          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-          DOMAIN_NAME: ${{ env.DOMAIN_NAME }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: |
-          echo "🔒 Setting up SSL certificates for $DOMAIN_NAME..."
-          
-          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$DOMAIN_NAME" ]]; then
-            sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
-              # Install Cloudflare DNS plugin for Certbot
-              echo '📦 Installing Certbot Cloudflare plugin...'
-              pip install certbot-dns-cloudflare || {
-                pacman -S --noconfirm python-pip
-                pip install certbot-dns-cloudflare
-              }
-              
-              # Create Cloudflare credentials file
-              mkdir -p /root/.secrets
-              cat > /root/.secrets/cloudflare.ini << 'CFEOF'
-          dns_cloudflare_api_token = $CLOUDFLARE_API_TOKEN
-          CFEOF
-              chmod 600 /root/.secrets/cloudflare.ini
-              
-              # Request SSL certificates for all domains
-              echo '🔒 Requesting SSL certificates...'
-              certbot certonly \\
-                --dns-cloudflare \\
-                --dns-cloudflare-credentials /root/.secrets/cloudflare.ini \\
-                --dns-cloudflare-propagation-seconds 60 \\
-                --email admin@7gram.xyz \\
-                --agree-tos \\
-                --non-interactive \\
-                --expand \\
-                -d $DOMAIN_NAME \\
-                -d www.$DOMAIN_NAME \\
-                -d api.$DOMAIN_NAME || {
-                echo '⚠️ SSL certificate request failed, will continue with HTTP'
-                exit 0
-              }
-              
-              if [[ -f /etc/letsencrypt/live/$DOMAIN_NAME/fullchain.pem ]]; then
-                echo '✅ SSL certificates obtained successfully'
-                ls -la /etc/letsencrypt/live/$DOMAIN_NAME/
-                
-                # Copy SSL-enabled nginx configuration
-                echo '🔄 Updating nginx configuration for SSL...'
-                cd /opt/ats
-                cp config/nginx-with-ssl.conf config/nginx.conf
-                
-                # Restart nginx container to load SSL certificates
-                echo '🔄 Restarting nginx container to load SSL certificates...'
-                docker-compose restart nginx
-                
-                # Test SSL configuration
-                echo '🔍 Testing SSL configuration...'
-                sleep 10
-                if docker exec ats-nginx-proxy nginx -t; then
-                  echo '✅ Nginx SSL configuration is valid'
-                  
-                  # Test HTTPS access
-                  if curl -k -f https://localhost/nginx-health >/dev/null 2>&1; then
-                    echo '✅ HTTPS is working'
-                  else
-                    echo '⚠️ HTTPS not responding yet, may need more time'
-                  fi
-                else
-                  echo '⚠️ Nginx SSL configuration has issues, reverting to HTTP-only'
-                  cp config/nginx.conf.backup config/nginx.conf 2>/dev/null || echo 'No backup found'
-                  docker-compose restart nginx
-                fi
-              else
-                echo '❌ SSL certificate files not found'
-              fi
-            "
-          else
-            echo "⚠️ Cloudflare API token not configured, skipping SSL setup"
-            echo "   Configure CLOUDFLARE_API_TOKEN secret for automatic SSL certificates"
           fi
 
       - name: 🌐 Update Cloudflare DNS Records
