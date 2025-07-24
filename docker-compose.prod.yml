@@ -13,6 +13,7 @@ services:
       - "80"
     environment:
       - NODE_ENV=production
+      - TZ=${TZ:-America/Toronto}
     networks:
       - ats-network
     restart: unless-stopped
@@ -35,6 +36,7 @@ services:
       - "3001"
     environment:
       - NODE_ENV=production
+      - TZ=${TZ:-America/Toronto}
       - PORT=3001
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-change-this}
       - FRONTEND_URL=http://localhost
@@ -92,6 +94,8 @@ services:
       # Mount SSL certificates if they exist (conditional)
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /etc/ssl/ats:/etc/ssl/ats:ro
+    environment:
+      - TZ=${TZ:-America/Toronto}
     networks:
       - ats-network
     restart: unless-stopped

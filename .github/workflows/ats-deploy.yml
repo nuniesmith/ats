@@ -486,6 +486,11 @@ jobs:
             echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf
             sysctl vm.overcommit_memory=1
             
+            # Set timezone to EST (Toronto, Canada)
+            echo "🕐 Setting timezone to America/Toronto (EST)..."
+            timedatectl set-timezone America/Toronto
+            echo "✅ Timezone set to: $(timedatectl show --property=Timezone --value)"
+            
             # Verify docker installation and enable service immediately
             if systemctl list-unit-files | grep -q docker.service; then
               echo "✅ Docker service found, enabling..."
@@ -532,6 +537,11 @@ jobs:
           hostnamectl set-hostname ats
           echo "127.0.0.1 ats ats.7gram.xyz" >> /etc/hosts
           echo "✅ Hostname set to 'ats'"
+          
+          # Verify timezone setting
+          echo "🕐 Verifying timezone configuration..."
+          echo "   Current timezone: $(timedatectl show --property=Timezone --value)"
+          echo "   Current time: $(date)"
           
           # Start Docker
           systemctl start docker
@@ -921,6 +931,7 @@ jobs:
           # Create environment file
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "cat > /opt/ats/.env << 'EOF'
           NODE_ENV=production
+          TZ=America/Toronto
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           DOMAIN_NAME=${{ env.DOMAIN_NAME }}
           ATS_DEFAULT_PASSWORD=${{ secrets.ATS_DEFAULT_PASSWORD }}
