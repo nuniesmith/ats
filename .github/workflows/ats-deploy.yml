@@ -406,7 +406,8 @@ jobs:
             
             # Install essential packages with verification
             echo "📦 Installing essential packages..."
-            for pkg in curl wget git unzip nginx docker docker-compose; do
+            PACKAGES=(curl wget git unzip nginx docker docker-compose)
+            for pkg in "${PACKAGES[@]}"; do
               echo "Installing $pkg..."
               pacman -S --noconfirm --needed "$pkg" || echo "Failed to install $pkg, continuing..."
             done
@@ -474,8 +475,11 @@ jobs:
             
             # Install DNS Cloudflare plugin via pip (more reliable)
             echo "📦 Installing Certbot DNS Cloudflare plugin..."
-            pip install --upgrade pip
-            pip install certbot-dns-cloudflare || echo "Failed to install DNS plugin, SSL will use self-signed only"
+            pip install --upgrade pip --break-system-packages || echo "Failed to upgrade pip"
+            pip install certbot-dns-cloudflare --break-system-packages || {
+              echo "Failed to install DNS plugin via pip, trying pacman..."
+              pacman -S --noconfirm --needed python-certbot-dns-cloudflare || echo "DNS plugin installation failed, SSL will use self-signed only"
+            }
             
             # Configure system optimizations
             echo "⚙️ Configuring system optimizations..."
@@ -494,9 +498,12 @@ jobs:
             
             # Verify docker-compose installation
             if ! command -v docker-compose >/dev/null 2>&1; then
-              echo "Installing docker-compose via pip as fallback..."
-              pacman -S --noconfirm python-pip
-              pip install docker-compose
+              echo "Installing docker-compose via pacman..."
+              pacman -S --noconfirm --needed docker-compose || {
+                echo "Installing docker-compose via pip as fallback..."
+                pacman -S --noconfirm python-pip
+                pip install docker-compose --break-system-packages || echo "docker-compose installation failed"
+              }
             fi
             
             # Enable essential services
