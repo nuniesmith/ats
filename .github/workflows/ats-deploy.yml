@@ -891,6 +891,7 @@ jobs:
           
           # Copy nginx configuration
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx.conf root@$SERVER_IP:/opt/ats/config/nginx.conf
+          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx-with-ssl.conf root@$SERVER_IP:/opt/ats/config/nginx-with-ssl.conf
           
           # Create environment file
           sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "cat > /opt/ats/.env << 'EOF'
@@ -1108,9 +1109,13 @@ jobs:
                 echo '✅ SSL certificates obtained successfully'
                 ls -la /etc/letsencrypt/live/$DOMAIN_NAME/
                 
+                # Copy SSL-enabled nginx configuration
+                echo '🔄 Updating nginx configuration for SSL...'
+                cd /opt/ats
+                cp config/nginx-with-ssl.conf config/nginx.conf
+                
                 # Restart nginx container to load SSL certificates
                 echo '🔄 Restarting nginx container to load SSL certificates...'
-                cd /opt/ats
                 docker-compose restart nginx
                 
                 # Test SSL configuration
@@ -1118,8 +1123,17 @@ jobs:
                 sleep 10
                 if docker exec ats-nginx-proxy nginx -t; then
                   echo '✅ Nginx SSL configuration is valid'
+                  
+                  # Test HTTPS access
+                  if curl -k -f https://localhost/nginx-health >/dev/null 2>&1; then
+                    echo '✅ HTTPS is working'
+                  else
+                    echo '⚠️ HTTPS not responding yet, may need more time'
+                  fi
                 else
-                  echo '⚠️ Nginx SSL configuration has issues, but continuing...'
+                  echo '⚠️ Nginx SSL configuration has issues, reverting to HTTP-only'
+                  cp config/nginx.conf.backup config/nginx.conf 2>/dev/null || echo 'No backup found'
+                  docker-compose restart nginx
                 fi
               else
                 echo '❌ SSL certificate files not found'
