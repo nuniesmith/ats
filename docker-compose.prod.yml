@@ -91,6 +91,7 @@ services:
       - nginx-logs:/var/log/nginx
       # Mount SSL certificates if they exist (conditional)
       - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /etc/ssl/ats:/etc/ssl/ats:ro
     networks:
       - ats-network
     restart: unless-stopped
