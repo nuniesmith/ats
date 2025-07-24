@@ -113,13 +113,38 @@ check_certificates() {
 # Function to restart nginx
 restart_nginx() {
     echo "🔄 Restarting nginx..."
-    if command -v docker-compose >/dev/null 2>&1 && [[ -f /opt/ats/docker-compose.yml ]]; then
-        cd /opt/ats
-        docker-compose restart nginx || echo "⚠️ Failed to restart nginx container"
+    if docker-compose ps nginx >/dev/null 2>&1; then
+        docker-compose restart nginx
     elif systemctl is-active --quiet nginx; then
-        systemctl restart nginx || echo "⚠️ Failed to restart nginx service"
+        systemctl restart nginx
     else
-        echo "ℹ️ No nginx service found to restart"
+        echo "⚠️ No nginx service found to restart"
+    fi
+}
+
+# Switch nginx configuration based on SSL availability
+switch_nginx_config() {
+    echo "🔧 Switching nginx configuration..."
+    
+    if [[ -f "$CERT_DIR/fullchain.pem" && -f "$CERT_DIR/privkey.pem" ]]; then
+        echo "✅ SSL certificates found, using SSL configuration"
+        if [[ -f /opt/ats/config/nginx.conf ]]; then
+            cp /opt/ats/config/nginx.conf /etc/nginx/nginx.conf
+        fi
+    else
+        echo "⚠️ No SSL certificates, using HTTP-only configuration"
+        if [[ -f /opt/ats/config/nginx-http-only.conf ]]; then
+            cp /opt/ats/config/nginx-http-only.conf /etc/nginx/nginx.conf
+        fi
+    fi
+    
+    # Test nginx configuration
+    if nginx -t 2>/dev/null; then
+        echo "✅ Nginx configuration is valid"
+        return 0
+    else
+        echo "❌ Nginx configuration test failed"
+        return 1
     fi
 }
 
@@ -156,6 +181,7 @@ case "${1:-auto}" in
         echo "🤖 Auto mode: checking existing certificates..."
         if check_certificates; then
             echo "✅ Valid certificates found, nothing to do"
+            switch_nginx_config
         else
             echo "🔧 No valid certificates, generating self-signed..."
             generate_self_signed
@@ -172,6 +198,7 @@ case "${1:-auto}" in
                 echo "ℹ️ No Cloudflare credentials, using self-signed certificates"
             fi
             
+            switch_nginx_config
             restart_nginx
         fi
         ;;

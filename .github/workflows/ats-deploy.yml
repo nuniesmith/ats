@@ -892,6 +892,7 @@ jobs:
           # Copy nginx configurations
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx.conf root@$SERVER_IP:/opt/ats/config/nginx.conf
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx-with-ssl.conf root@$SERVER_IP:/opt/ats/config/nginx-with-ssl.conf
+          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx-http-only.conf root@$SERVER_IP:/opt/ats/config/nginx-http-only.conf
           
           # Copy SSL management scripts and services
           sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no scripts/ssl-manager.sh root@$SERVER_IP:/opt/ats/scripts/ssl-manager.sh
@@ -986,8 +987,35 @@ jobs:
               echo '✅ Cloudflare credentials configured'
             fi
             
+            # Backup original SSL nginx config and start with HTTP-only
+            echo '🔧 Setting up initial HTTP-only nginx configuration...'
+            cp config/nginx.conf config/nginx-ssl.conf.backup
+            cp config/nginx-http-only.conf config/nginx.conf
+            
+            # Pull and start containers with HTTP-only config
+            echo 'Pulling Docker images...'
+            docker-compose pull
+            
+            echo 'Starting containers (HTTP-only initially)...'
+            docker-compose up -d
+            
+            # Wait for containers to be ready
+            echo 'Waiting for containers to start...'
+            sleep 30
+            
             # Run SSL manager to set up certificates
+            echo '🔒 Setting up SSL certificates...'
             ./scripts/ssl-manager.sh auto
+            
+            # Now switch to SSL configuration and restart nginx
+            echo '🔄 Switching to SSL configuration...'
+            if [[ -f /etc/letsencrypt/live/ats.7gram.xyz/fullchain.pem ]]; then
+              echo '✅ SSL certificates found, enabling HTTPS'
+              cp config/nginx-ssl.conf.backup config/nginx.conf
+              docker-compose restart nginx
+            else
+              echo '⚠️ No SSL certificates, staying with HTTP-only'
+            fi
             
             # Enable SSL management services
             echo '⚙️ Setting up SSL management services...'
@@ -995,13 +1023,6 @@ jobs:
             systemctl enable ats-ssl-manager.service
             systemctl enable ats-ssl-renewal.timer
             systemctl start ats-ssl-renewal.timer
-            
-            # Pull and start containers
-            echo 'Pulling Docker images...'
-            docker-compose pull
-            
-            echo 'Starting containers...'
-            docker-compose up -d
             
             # Show container status
             echo '📊 Container status:'
