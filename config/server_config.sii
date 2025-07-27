@@ -28,9 +28,6 @@ server_config : .config {
  show_server: true
  moderator_list: 0
  mods: .mods {
-  active[0]: "/mod/154_content.scs"
-  active[1]: "/mod/downgrade_info_package.scs"
-  active[2]: "/mod/sound.scs"
  }
 }
 }

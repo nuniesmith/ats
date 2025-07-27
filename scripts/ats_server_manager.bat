@@ -19,31 +19,64 @@ set "BASE_DIR=%SCRIPT_DIR%.."
 set "ENV_FILE=%BASE_DIR%\.env"
 
 echo Loading environment configuration...
-if exist "%ENV_FILE%" (
-    echo ✓ Found .env file: %ENV_FILE%
-    
-    :: Simple environment loading without quotes handling for now
-    for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%ENV_FILE%") do (
-        if not "%%a"=="" (
-            set "%%a=%%b"
-        )
-    )
-    echo ✓ Environment loaded from .env file
-) else (
-    echo ⚠️  No .env file found, using defaults...
-    :: Fallback to hardcoded defaults
-    set "SERVER_DIR=C:\Program Files (x86)\Steam\steamapps\common\American Truck Simulator Dedicated Server"
-    set "GAME_DIR=C:\Program Files (x86)\Steam\steamapps\common\American Truck Simulator"
-    set "WORKSHOP_DIR=C:\Program Files (x86)\Steam\steamapps\workshop\content\270880"
-    set "DEFAULT_SERVER_ID=90271602251410447"
-    set "SERVER_TOKEN=15AE684920A1694E27BFA8B64F75AD1B"
-    set "COLLECTION_ID=3530633316"
-    set "SERVER_NAME=Freddy's ATS Dedicated Server"
-    set "SERVER_PASSWORD=ruby"
-    set "MAX_PLAYERS=8"
-    set "MODS_OPTIONING=true"
-    set "SCRIPT_VERSION=1.0.0"
-)
+:: For now, use defaults to avoid parsing issues with parentheses in paths
+echo Using fallback defaults...
+set "SERVER_DIR=C:\Program Files (x86)\Steam\steamapps\common\American Truck Simulator Dedicated Server"
+set "GAME_DIR=C:\Program Files (x86)\Steam\steamapps\common\American Truck Simulator"
+set "WORKSHOP_DIR=C:\Program Files (x86)\Steam\steamapps\workshop\content\270880"
+set "DEFAULT_SERVER_ID=90271602251410447"
+set "SERVER_TOKEN=15AE684920A1694E27BFA8B64F75AD1B"
+set "COLLECTION_ID=3530633316"
+set "SERVER_NAME=Freddy's ATS Dedicated Server"
+set "SERVER_PASSWORD=ruby"
+set "MAX_PLAYERS=8"
+set "MODS_OPTIONING=true"
+set "SCRIPT_VERSION=1.0.0"
+set "SERVER_DESCRIPTION=Enhanced ATS server with curated sound and graphics mods"
+set "SERVER_WELCOME_MESSAGE=Welcome to Freddy's server! Enjoy the enhanced experience with optional mods enabled."
+set "MAX_VEHICLES_TOTAL=100"
+set "MAX_AI_VEHICLES_PLAYER=50"
+set "MAX_AI_VEHICLES_PLAYER_SPAWN=50"
+set "CONNECTION_VIRTUAL_PORT=100"
+set "QUERY_VIRTUAL_PORT=101"
+set "CONNECTION_DEDICATED_PORT=27015"
+set "QUERY_DEDICATED_PORT=27016"
+set "PLAYER_DAMAGE=true"
+set "TRAFFIC=true"
+set "HIDE_IN_COMPANY=false"
+set "HIDE_COLLIDING=true"
+set "FORCE_SPEED_LIMITER=false"
+set "TIMEZONES=0"
+set "SERVICE_NO_COLLISION=false"
+set "IN_MENU_GHOSTING=false"
+set "NAME_TAGS=true"
+set "FRIENDS_ONLY=false"
+set "SHOW_SERVER=true"
+set "MODERATOR_LIST=0"
+
+:: Predefined mod order (based on your Active Mods list)
+set "MOD_ORDER[0]=Sound Fixes Pack v25.31 - ATS"
+set "MOD_ORDER[1]=Maxwell"
+set "MOD_ORDER[2]=JC Amateur Sound Effects Pack"
+set "MOD_ORDER[3]=Heatshields For SCS 389 Plain Stacks"
+set "MOD_ORDER[4]=Cummins N14 Sound & Engine Pack"
+set "MOD_ORDER[5]=Cummins ISX Straight pipe sound"
+set "MOD_ORDER[6]=CAT 3406E 2WS Straight pipe sound"
+set "MOD_ORDER[7]=Box Trailer Enhanced"
+set "MOD_ORDER[8]=Real companies, gas stations & billboards"
+set "MOD_ORDER[9]=Real Eaton Fuller Transmissions"
+set "MOD_ORDER[10]=Real World Signs & Logos"
+set "MOD_ORDER[11]=SiSL's Mega Pack"
+set "MOD_ORDER[12]=SCS Long Chassis + 625HP Multiplayer"
+set "MOD_ORDER[13]=Reverse Lights - farther, wider, brighter"
+set "MOD_ORDER[14]=Realistic Vehicle Lights Mod v7.4 (by Frkn64)"
+set "MOD_ORDER[15]=Realistic Truck Physics Mod v9.0.6 (by Frkn64)"
+set "MOD_ORDER[16]=Realistic Mirror FOV"
+set "MOD_ORDER[17]=Realistic Brutal Graphics And Weather"
+set "MOD_ORDER[18]=Air Brake Sound Mod"
+set "MOD_ORDER_COUNT=19"
+
+echo ✓ Configuration loaded
 
 set "ARCHIVE_DIR=%BASE_DIR%\archive"
 
@@ -71,12 +104,13 @@ echo 2. Setup Server Environment
 echo 3. Download Latest Workshop Mods
 echo 4. Start Server Only
 echo 5. Start Server + Game Client
-echo 6. Server Status ^& Diagnostics
-echo 7. Stop All Servers
-echo 8. Dynamic Workshop Manager
-echo 9. Advanced Configuration
+echo 6. Launch Game Client Only (Auto-detect Server ID)
+echo 7. Server Status ^& Diagnostics
+echo 8. Stop All Servers
+echo 9. Dynamic Workshop Manager
+echo A. Advanced Configuration
 echo E. Environment Configuration Manager
-echo A. Archive Old Scripts ^& Cleanup
+echo C. Archive Old Scripts ^& Cleanup
 echo 0. Exit
 echo.
 set /p CHOICE="Select option: "
@@ -86,12 +120,13 @@ if /i "%CHOICE%"=="2" goto SETUP_ENVIRONMENT
 if /i "%CHOICE%"=="3" goto UPDATE_MODS
 if /i "%CHOICE%"=="4" goto START_SERVER
 if /i "%CHOICE%"=="5" goto START_BOTH
-if /i "%CHOICE%"=="6" goto DIAGNOSTICS
-if /i "%CHOICE%"=="7" goto STOP_SERVERS
-if /i "%CHOICE%"=="8" goto WORKSHOP_MANAGER
-if /i "%CHOICE%"=="9" goto ADVANCED_CONFIG
+if /i "%CHOICE%"=="6" goto LAUNCH_CLIENT_ONLY
+if /i "%CHOICE%"=="7" goto DIAGNOSTICS
+if /i "%CHOICE%"=="8" goto STOP_SERVERS
+if /i "%CHOICE%"=="9" goto WORKSHOP_MANAGER
+if /i "%CHOICE%"=="A" goto ADVANCED_CONFIG
 if /i "%CHOICE%"=="E" goto ENV_MANAGER
-if /i "%CHOICE%"=="A" goto ARCHIVE_CLEANUP
+if /i "%CHOICE%"=="C" goto ARCHIVE_CLEANUP
 if /i "%CHOICE%"=="0" goto END
 goto MAIN_MENU
 
@@ -129,17 +164,19 @@ taskkill /F /IM amtrucks_server.exe 2>nul
 echo Waiting for processes to stop...
 timeout /t 2 >nul
 
-:: Validate server directory
-if not exist "%SERVER_DIR%" (
+:: Validate server directory using a different approach
+echo Validating server directory...
+dir "%SERVER_DIR%" >nul 2>&1
+if errorlevel 1 (
     echo ❌ ERROR: Server directory not found: "%SERVER_DIR%"
-    echo Please check your .env file configuration
+    echo Please check your server installation
     pause
     goto MAIN_MENU
 )
 
 :: Create necessary directories
 echo Creating server directories...
-if not exist "%SERVER_DIR%\mod" mkdir "%SERVER_DIR%\mod"
+md "%SERVER_DIR%\mod" 2>nul
 
 :: Check for server packages
 if exist "%USERPROFILE%\Documents\American Truck Simulator\server_packages.sii" (
@@ -179,7 +216,9 @@ echo.
 
 :: Clean existing mods
 echo Cleaning existing server mods...
-if exist "%SERVER_DIR%\mod\*.*" del /q "%SERVER_DIR%\mod\*.*"
+if exist "%SERVER_DIR%\mod\*.*" (
+    del /q "%SERVER_DIR%\mod\*.*"
+)
 
 :: Check if we have SteamCMD available or need to use existing workshop files
 call :CHECK_STEAMCMD
@@ -239,21 +278,52 @@ if not exist "%SERVER_DIR%\server_packages.sii" (
 )
 
 echo.
-echo Installed mods:
-for %%f in ("%SERVER_DIR%\mod\*.scs") do echo   - %%~nxf
+echo Installed mods (in loading order):
+set /a DISPLAY_COUNT=0
+for /f "tokens=*" %%f in ('dir /b /on "%SERVER_DIR%\mod\*.scs" 2^>nul') do (
+    set /a DISPLAY_COUNT+=1
+    echo   [!DISPLAY_COUNT!] %%f
+)
 echo.
 
 cd /d "%SERVER_DIR%\bin\win_x64"
 
-echo Starting server...
-start "Freddy's ATS Server" "amtrucks_server.exe" ^
-    -server_id %SERVER_ID% ^
-    -server_config "..\server_config.sii" ^
-    +mods_optioning 1 ^
-    +enable_mods 1 ^
-    +g_console 1 ^
-    +force_load_mods 1 ^
-    +use_mod_folder 1
+echo Starting server with session ID capture...
+
+:: Create a wrapper script to capture the server ID
+(
+echo @echo off
+echo setlocal EnableDelayedExpansion
+echo title Freddy's ATS Server - Enhanced Logging
+echo cd /d "%SERVER_DIR%\bin\win_x64"
+echo echo ===========================================
+echo echo   Freddy's ATS Dedicated Server
+echo echo ===========================================
+echo echo Server will capture session ID for easy client connections
+echo echo Enhanced logging enabled for troubleshooting
+echo echo.
+echo echo Common startup messages you may see:
+echo echo - *** ERROR *** : [dstorage] - Normal, can be ignored
+echo echo - *** WARNING *** : Unfinished data chunk - May indicate mod issues
+echo echo - Setting breakpad minidump - Normal crash reporting setup
+echo echo - SteamInternal_SetMinidumpSteamID - Normal Steam API init
+echo echo.
+echo echo Starting server now...
+echo echo ==========================================
+echo.
+echo amtrucks_server.exe -anonymous -server_config "..\..\server_config.sii" ^| tee "%TEMP%\ats_server_output.txt"
+echo.
+echo echo ==========================================
+echo echo Server session ended. Check above for any critical errors.
+echo echo Session ID and other info saved to: %TEMP%\ats_server_output.txt
+echo if exist "%TEMP%\ats_server_output.txt" ^(
+echo     findstr /C:"Session search id" "%TEMP%\ats_server_output.txt" ^> "%TEMP%\ats_server_id.txt"
+echo     echo Session ID captured for client connections
+echo ^)
+if not defined SILENT echo pause
+) > "%TEMP%\start_ats_server_wrapper.bat"
+
+start "Freddy's ATS Server" "%TEMP%\start_ats_server_wrapper.bat"
 
 echo.
 echo ✓ Server started! Window title: "Freddy's ATS Server"
@@ -283,7 +353,8 @@ echo.
 
 cd /d "%GAME_DIR%"
 
-start "ATS Client" "amtrucks.exe" ^
+echo Starting ATS game client...
+start "ATS Client" "bin\win_x64\amtrucks.exe" ^
     +online_server_id %SERVER_ID% ^
     +server_join_password ruby ^
     +g_online_server_name "Freddy's ATS Dedicated Server" ^
@@ -292,6 +363,91 @@ start "ATS Client" "amtrucks.exe" ^
 
 echo.
 echo ✓ Game client started and connecting to server!
+timeout /t 5
+goto MAIN_MENU
+
+:LAUNCH_CLIENT_ONLY
+cls
+echo ===========================================
+echo   Launch Game Client (Auto-detect Server)
+echo ===========================================
+echo.
+
+echo Checking for running server...
+tasklist /FI "IMAGENAME eq amtrucks_server.exe" 2>NUL | find /I /N "amtrucks_server.exe" >nul && (
+    echo ✓ ATS Server is RUNNING
+) || (
+    echo ❌ ATS Server is NOT running
+    echo.
+    echo Please start the server first using option 4 or 5.
+    pause
+    goto MAIN_MENU
+)
+
+echo.
+echo Detecting server session ID...
+
+:: Try to get the session ID from the captured file
+set "SERVER_SESSION_ID="
+if exist "%TEMP%\ats_server_id.txt" (
+    for /f "tokens=4" %%a in ('findstr "Session search id:" "%TEMP%\ats_server_id.txt"') do (
+        set "SERVER_SESSION_ID=%%a"
+    )
+)
+
+if defined SERVER_SESSION_ID (
+    echo ✓ Detected Server Session ID: %SERVER_SESSION_ID%
+) else (
+    echo ⚠️  Could not auto-detect session ID
+    echo Using fallback Server ID: %DEFAULT_SERVER_ID%
+    set "SERVER_SESSION_ID=%DEFAULT_SERVER_ID%"
+)
+
+echo.
+echo Launch Options:
+echo 1. Connect with detected/fallback ID: %SERVER_SESSION_ID%
+echo 2. Enter custom Server ID
+echo 3. Return to main menu
+echo.
+set /p CLIENT_CHOICE="Select option: "
+
+if "%CLIENT_CHOICE%"=="1" goto LAUNCH_WITH_ID
+if "%CLIENT_CHOICE%"=="2" goto ENTER_CUSTOM_ID
+if "%CLIENT_CHOICE%"=="3" goto MAIN_MENU
+goto LAUNCH_CLIENT_ONLY
+
+:ENTER_CUSTOM_ID
+echo.
+set /p SERVER_SESSION_ID="Enter Server ID: "
+if not defined SERVER_SESSION_ID goto ENTER_CUSTOM_ID
+
+:LAUNCH_WITH_ID
+cls
+echo ===========================================
+echo   Launching Game Client
+echo ===========================================
+echo.
+echo Connecting to server...
+echo Server ID: %SERVER_SESSION_ID%
+echo Password: %SERVER_PASSWORD%
+echo.
+
+cd /d "%GAME_DIR%"
+
+echo Starting ATS game client...
+start "ATS Client" "bin\win_x64\amtrucks.exe" ^
+    +online_server_id %SERVER_SESSION_ID% ^
+    +server_join_password %SERVER_PASSWORD% ^
+    +g_online_server_name "%SERVER_NAME%" ^
+    +mods_optioning 1 ^
+    +enable_mods 1
+
+echo.
+echo ✓ Game client started and connecting to server!
+echo ✓ Server ID: %SERVER_SESSION_ID%
+echo ✓ Password: %SERVER_PASSWORD%
+echo.
+echo The game should automatically attempt to connect to your server.
 timeout /t 5
 goto MAIN_MENU
 
@@ -311,7 +467,24 @@ tasklist /FI "IMAGENAME eq amtrucks_server.exe" 2>NUL | find /I /N "amtrucks_ser
 )
 
 echo.
-echo 2. FILE CHECKS
+echo 2. SERVER CONNECTION INFO
+echo =========================
+if exist "%TEMP%\ats_server_id.txt" (
+    echo ✓ Server ID file found
+    for /f "tokens=4" %%a in ('findstr "Session search id:" "%TEMP%\ats_server_id.txt" 2^>nul') do (
+        echo ✓ Detected Session ID: %%a
+    )
+) else (
+    echo ⚠️  Server ID file not found
+    echo   Start server with updated script to capture session ID
+)
+echo   Default Server ID: %DEFAULT_SERVER_ID%
+echo   Server Password: %SERVER_PASSWORD%
+echo   Connection Port: %CONNECTION_DEDICATED_PORT%
+echo   Query Port: %QUERY_DEDICATED_PORT%
+
+echo.
+echo 3. FILE CHECKS
 echo ==============
 if exist "%SERVER_DIR%\server_config.sii" (
     echo ✓ Server config exists
@@ -332,12 +505,13 @@ if exist "%SERVER_DIR%\mod" (
 )
 
 echo.
-echo 3. MOD STATUS
+echo 4. MOD STATUS
 echo =============
 set /a MOD_COUNT=0
-for %%f in ("%SERVER_DIR%\mod\*.scs") do (
+echo Mods loaded in order:
+for /f "tokens=*" %%f in ('dir /b /on "%SERVER_DIR%\mod\*.scs" 2^>nul') do (
     set /a MOD_COUNT+=1
-    echo ✓ %%~nxf
+    echo [!MOD_COUNT!] %%f
 )
 echo Total mods: !MOD_COUNT!
 
@@ -384,6 +558,8 @@ echo ==============
 echo F. Fix Server Configuration
 echo T. Test Server Without Mods
 echo V. View Current Config
+echo S. Server Startup Diagnostics
+echo C. Clean Mod Files and Redownload
 echo R. Return to Main Menu
 echo.
 set /p DIAG_CHOICE="Select option: "
@@ -391,6 +567,8 @@ set /p DIAG_CHOICE="Select option: "
 if /i "%DIAG_CHOICE%"=="F" call :FIX_CONFIG
 if /i "%DIAG_CHOICE%"=="T" call :TEST_NO_MODS
 if /i "%DIAG_CHOICE%"=="V" call :VIEW_CONFIG
+if /i "%DIAG_CHOICE%"=="S" call :SERVER_STARTUP_DIAG
+if /i "%DIAG_CHOICE%"=="C" call :CLEAN_AND_REDOWNLOAD_MODS
 if /i "%DIAG_CHOICE%"=="R" goto MAIN_MENU
 goto DIAGNOSTICS
 
@@ -590,8 +768,12 @@ goto MANAGE_STEAMCMD
 :CLEAN_STEAMCMD
 echo.
 echo Cleaning SteamCMD cache...
-if exist "%STEAMCMD_DIR%\steamapps" rd /s /q "%STEAMCMD_DIR%\steamapps"
-if exist "%STEAMCMD_DIR%\logs" rd /s /q "%STEAMCMD_DIR%\logs"
+if exist "%STEAMCMD_DIR%\steamapps" (
+    rd /s /q "%STEAMCMD_DIR%\steamapps"
+)
+if exist "%STEAMCMD_DIR%\logs" (
+    rd /s /q "%STEAMCMD_DIR%\logs"
+)
 echo ✓ Cache cleaned
 pause
 goto MANAGE_STEAMCMD
@@ -599,7 +781,9 @@ goto MANAGE_STEAMCMD
 :REINSTALL_STEAMCMD
 echo.
 echo Reinstalling SteamCMD...
-if exist "%STEAMCMD_DIR%" rd /s /q "%STEAMCMD_DIR%"
+if exist "%STEAMCMD_DIR%" (
+    rd /s /q "%STEAMCMD_DIR%"
+)
 call :DOWNLOAD_STEAMCMD
 goto MANAGE_STEAMCMD
 
@@ -691,7 +875,9 @@ goto ADVANCED_CONFIG
 
 :BACKUP_CONFIG
 echo.
-if not exist "%SCRIPT_DIR%\backups" mkdir "%SCRIPT_DIR%\backups"
+if not exist "%SCRIPT_DIR%\backups" (
+    mkdir "%SCRIPT_DIR%\backups"
+)
 set "BACKUP_NAME=server_config_%DATE:~-4%%DATE:~4,2%%DATE:~7,2%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%.sii"
 set "BACKUP_NAME=%BACKUP_NAME: =0%"
 copy "%SERVER_DIR%\server_config.sii" "%SCRIPT_DIR%\backups\%BACKUP_NAME%" >nul
@@ -722,7 +908,9 @@ echo ===========================================
 echo.
 
 :: Create archive directory
-if not exist "%ARCHIVE_DIR%" mkdir "%ARCHIVE_DIR%"
+if not exist "%ARCHIVE_DIR%" (
+    mkdir "%ARCHIVE_DIR%"
+)
 
 echo This will move the following old batch files to archive:
 echo.
@@ -748,7 +936,9 @@ for %%f in ("%BASE_DIR%\*.bat") do (
 :: Also archive the old config if it exists
 if exist "%BASE_DIR%\config" (
     echo Moving old config directory...
-    if not exist "%ARCHIVE_DIR%\config" mkdir "%ARCHIVE_DIR%\config"
+    if not exist "%ARCHIVE_DIR%\config" (
+        mkdir "%ARCHIVE_DIR%\config"
+    )
     xcopy "%BASE_DIR%\config\*.*" "%ARCHIVE_DIR%\config\" /Y /E >nul
     rd /s /q "%BASE_DIR%\config"
 )
@@ -786,7 +976,9 @@ if /i not "%DOWNLOAD_CONFIRM%"=="Y" goto :eof
 
 echo.
 echo Creating SteamCMD directory...
-if not exist "%STEAMCMD_DIR%" mkdir "%STEAMCMD_DIR%"
+if not exist "%STEAMCMD_DIR%" (
+    mkdir "%STEAMCMD_DIR%"
+)
 
 echo Downloading SteamCMD...
 powershell -Command "& { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip' -OutFile '%STEAMCMD_DIR%\steamcmd.zip' }"
@@ -901,42 +1093,104 @@ echo Running SteamCMD to download mods...
 
 :: Copy downloaded mods to server
 echo.
-echo Copying downloaded mods to server...
+echo Copying downloaded mods to server in predefined order...
 set "STEAMCMD_WORKSHOP=%STEAMCMD_DIR%\steamapps\workshop\content\270880"
 
 if exist "%STEAMCMD_WORKSHOP%" (
-    for /d %%d in ("%STEAMCMD_WORKSHOP%\*") do (
-        for %%f in ("%%d\*.scs") do (
-            echo Copying: %%~nxf
-            copy "%%f" "%SERVER_DIR%\mod\" >nul 2>&1
-            if !errorlevel! equ 0 (
-                set /a COPIED_COUNT+=1
-            )
+    :: Copy mods in the predefined order
+    for /L %%i in (0,1,%MOD_ORDER_COUNT%) do (
+        call set "TARGET_MOD=%%MOD_ORDER[%%i]%%"
+        if defined TARGET_MOD (
+            call :FIND_AND_COPY_STEAMCMD_MOD "!TARGET_MOD!" %%i
         )
     )
-    echo ✓ Copied !COPIED_COUNT! mods from SteamCMD downloads
+    echo ✓ Copied !COPIED_COUNT! mods from SteamCMD downloads in predefined order
 ) else (
     echo ⚠️  SteamCMD workshop directory not found, using existing files...
     call :COPY_EXISTING_WORKSHOP_MODS
 )
 goto :eof
 
-:COPY_EXISTING_WORKSHOP_MODS
-echo.
-echo Using existing Steam Workshop files...
-set /a COPIED_COUNT=0
+:FIND_AND_COPY_STEAMCMD_MOD
+:: Function to find and copy a specific mod from SteamCMD downloads
+:: %1 = Mod name pattern to search for
+:: %2 = Order index for filename prefix
+setlocal EnableDelayedExpansion
+set "SEARCH_PATTERN=%~1"
+set "ORDER_INDEX=%~2"
 
-for /d %%d in ("%WORKSHOP_DIR%\*") do (
+for /d %%d in ("%STEAMCMD_WORKSHOP%\*") do (
     for %%f in ("%%d\*.scs") do (
-        echo Copying: %%~nxf
-        copy "%%f" "%SERVER_DIR%\mod\" >nul 2>&1
+        set "MOD_FILE=%%~nxf"
+        
+        :: Check if the mod file contains the search pattern (case insensitive)
+        echo "!MOD_FILE!" | findstr /i /c:"%SEARCH_PATTERN%" >nul
         if !errorlevel! equ 0 (
-            set /a COPIED_COUNT+=1
+            :: Format order index with leading zeros for proper sorting
+            set "FORMATTED_INDEX=00%ORDER_INDEX%"
+            set "FORMATTED_INDEX=!FORMATTED_INDEX:~-3!"
+            
+            :: Copy with order prefix to ensure loading order
+            echo Copying [!FORMATTED_INDEX!]: !MOD_FILE!
+            copy "%%f" "%SERVER_DIR%\mod\!FORMATTED_INDEX!_!MOD_FILE!" >nul 2>&1
+            if !errorlevel! equ 0 (
+                set /a COPIED_COUNT+=1
+            )
+            goto :eof
         )
     )
 )
 
-echo ✓ Copied !COPIED_COUNT! mods from existing workshop files
+echo ⚠️  Mod not found in SteamCMD downloads: %SEARCH_PATTERN%
+goto :eof
+
+:COPY_EXISTING_WORKSHOP_MODS
+echo.
+echo Using existing Steam Workshop files with predefined order...
+set /a COPIED_COUNT=0
+
+:: Copy mods in the predefined order
+for /L %%i in (0,1,%MOD_ORDER_COUNT%) do (
+    call set "TARGET_MOD=%%MOD_ORDER[%%i]%%"
+    if defined TARGET_MOD (
+        call :FIND_AND_COPY_MOD "!TARGET_MOD!" %%i
+    )
+)
+
+echo ✓ Copied !COPIED_COUNT! mods in predefined order
+goto :eof
+
+:FIND_AND_COPY_MOD
+:: Function to find and copy a specific mod by name pattern
+:: %1 = Mod name pattern to search for
+:: %2 = Order index for filename prefix
+setlocal EnableDelayedExpansion
+set "SEARCH_PATTERN=%~1"
+set "ORDER_INDEX=%~2"
+
+for /d %%d in ("%WORKSHOP_DIR%\*") do (
+    for %%f in ("%%d\*.scs") do (
+        set "MOD_FILE=%%~nxf"
+        
+        :: Check if the mod file contains the search pattern (case insensitive)
+        echo "!MOD_FILE!" | findstr /i /c:"%SEARCH_PATTERN%" >nul
+        if !errorlevel! equ 0 (
+            :: Format order index with leading zeros for proper sorting
+            set "FORMATTED_INDEX=00%ORDER_INDEX%"
+            set "FORMATTED_INDEX=!FORMATTED_INDEX:~-3!"
+            
+            :: Copy with order prefix to ensure loading order
+            echo Copying [!FORMATTED_INDEX!]: !MOD_FILE!
+            copy "%%f" "%SERVER_DIR%\mod\!FORMATTED_INDEX!_!MOD_FILE!" >nul 2>&1
+            if !errorlevel! equ 0 (
+                set /a COPIED_COUNT+=1
+            )
+            goto :eof
+        )
+    )
+)
+
+echo ⚠️  Mod not found: %SEARCH_PATTERN%
 goto :eof
 
 :CREATE_SERVER_CONFIG
@@ -973,10 +1227,10 @@ echo  moderator_list: %MODERATOR_LIST%
 echo  mods: .mods {
 ) > "%SERVER_DIR%\server_config.sii"
 
-:: Add mod entries
+:: Add mod entries in order (sorted by filename prefix)
 set /a MOD_COUNT=0
-for %%f in ("%SERVER_DIR%\mod\*.scs") do (
-    echo   active[!MOD_COUNT!]: "/mod/%%~nxf" >> "%SERVER_DIR%\server_config.sii"
+for /f "tokens=*" %%f in ('dir /b /on "%SERVER_DIR%\mod\*.scs" 2^>nul') do (
+    echo   active[!MOD_COUNT!]: "/mod/%%f" >> "%SERVER_DIR%\server_config.sii"
     set /a MOD_COUNT+=1
 )
 
@@ -1048,6 +1302,142 @@ for /f "usebackq eol=# tokens=1,* delims==" %%a in ("%ENV_FILE%") do (
 endlocal
 goto :eof
 
+:SERVER_STARTUP_DIAG
+echo.
+echo ===========================================
+echo   Server Startup Diagnostics
+echo ===========================================
+echo.
+
+echo Checking for common startup issues...
+echo.
+
+:: Check for corrupted mod files
+echo 1. CHECKING MOD FILE INTEGRITY
+echo ===============================
+set /a CORRUPT_COUNT=0
+set /a VALID_COUNT=0
+
+for %%f in ("%SERVER_DIR%\mod\*.scs") do (
+    :: Check file size (SCS files should be larger than 1KB)
+    for %%s in ("%%f") do (
+        if %%~zs LSS 1024 (
+            echo ⚠️  Suspicious small file: %%~nxf ^(%%~zs bytes^)
+            set /a CORRUPT_COUNT+=1
+        ) else (
+            set /a VALID_COUNT+=1
+        )
+    )
+)
+
+echo Valid mod files: !VALID_COUNT!
+echo Suspicious files: !CORRUPT_COUNT!
+
+if !CORRUPT_COUNT! GTR 0 (
+    echo.
+    echo ⚠️  Found suspicious mod files. Consider redownloading mods.
+)
+
+echo.
+echo 2. CHECKING DEPENDENCY ORDER
+echo =============================
+echo Verifying mod loading order matches dependency requirements...
+
+:: Check if Sound Fixes Pack is loaded first (critical for sound mods)
+for /f "tokens=*" %%f in ('dir /b /on "%SERVER_DIR%\mod\*.scs" 2^>nul') do (
+    echo "%%f" | findstr /i /c:"Sound Fixes" >nul
+    if !errorlevel! equ 0 (
+        echo ✓ Sound Fixes Pack found at correct position
+        goto :check_physics_mods
+    ) else (
+        echo First mod: %%f
+        echo ⚠️  Sound Fixes Pack should typically load first for compatibility
+        goto :check_physics_mods
+    )
+)
+
+:check_physics_mods
+echo.
+echo 3. TESTING SERVER STARTUP
+echo ==========================
+echo Starting server in diagnostic mode...
+
+cd /d "%SERVER_DIR%\bin\win_x64"
+
+:: Create diagnostic startup script
+(
+echo @echo off
+echo title ATS Server Diagnostic
+echo echo Starting ATS Server in diagnostic mode...
+echo echo Watching for common error patterns...
+echo echo.
+echo amtrucks_server.exe -anonymous -server_config "..\..\server_config.sii" -log_file "..\..\diagnostic.log"
+) > "%TEMP%\ats_diagnostic_start.bat"
+
+echo.
+echo Starting diagnostic server session...
+echo Check the diagnostic window for:
+echo - Any "FAILED" messages
+echo - Mod loading errors
+echo - Memory allocation issues
+echo.
+echo Press any key when ready to start diagnostic session...
+pause >nul
+
+start "ATS Diagnostic" "%TEMP%\ats_diagnostic_start.bat"
+
+echo.
+echo Diagnostic server started. Monitor the diagnostic window for errors.
+echo After testing, stop the server and return here.
+pause
+goto :eof
+
+:CLEAN_AND_REDOWNLOAD_MODS
+echo.
+echo ===========================================
+echo   Clean Mod Files and Redownload
+echo ===========================================
+echo.
+echo This will:
+echo 1. Remove all current server mod files
+echo 2. Clear any corrupted downloads
+echo 3. Redownload mods in the correct order
+echo.
+set /p CLEAN_CONFIRM="Continue with clean reinstall? (Y/N): "
+if /i not "%CLEAN_CONFIRM%"=="Y" goto :eof
+
+echo.
+echo Stopping any running servers...
+taskkill /F /IM amtrucks_server.exe 2>nul
+
+echo Cleaning server mod directory...
+if exist "%SERVER_DIR%\mod" (
+    rd /s /q "%SERVER_DIR%\mod"
+)
+mkdir "%SERVER_DIR%\mod"
+
+echo Cleaning SteamCMD cache...
+if exist "%STEAMCMD_DIR%\steamapps\workshop" (
+    rd /s /q "%STEAMCMD_DIR%\steamapps\workshop"
+)
+
+echo Clearing download logs...
+if exist "%STEAMCMD_DIR%\downloading_mods.log" (
+    del "%STEAMCMD_DIR%\downloading_mods.log"
+)
+
+echo.
+echo ✓ Cleanup complete! 
+echo.
+echo Now redownloading mods in correct order...
+call :UPDATE_MODS_SILENT
+
+echo.
+echo ✓ Clean reinstall complete!
+echo The server should now have fresh, properly ordered mod files.
+pause
+goto :eof
+
 :END
 cls
 echo.
@@ -1062,6 +1452,6 @@ echo Optional Mods: Enabled
 echo.
 echo Your workspace is now clean and organized!
 echo.
-echo Happy trucking! 🚛
+echo Happy trucking!
 timeout /t 5
 exit
