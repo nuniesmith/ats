@@ -1,7 +1,7 @@
 services:
   # React Web Application
   ats-web:
-    image: ${WEB_IMAGE:-}
+    image: ${WEB_IMAGE:-nuniesmith/ats:web-latest}
     build:
       context: ./src/web
       dockerfile: Dockerfile
@@ -9,10 +9,11 @@ services:
         - VITE_API_URL=${VITE_API_URL:-http://localhost/api}
         - VITE_SOCKET_URL=${VITE_SOCKET_URL:-http://localhost}
     container_name: ats-web-app
-    ports:
-      - "80:80"
+    expose:
+      - "80"
     environment:
       - NODE_ENV=${NODE_ENV:-production}
+      - TZ=${TZ:-America/Toronto}
       - VITE_API_URL=${VITE_API_URL:-http://localhost/api}
       - VITE_SOCKET_URL=${VITE_SOCKET_URL:-http://localhost}
     networks:
@@ -29,15 +30,16 @@ services:
 
   # Node.js API Server
   ats-api:
-    image: ${API_IMAGE:-}
+    image: ${API_IMAGE:-nuniesmith/ats:api-latest}
     build:
       context: ./src/api
       dockerfile: Dockerfile
     container_name: ats-api-server
-    ports:
-      - "3001:3001"
+    expose:
+      - "3001"
     environment:
       - NODE_ENV=${NODE_ENV:-production}
+      - TZ=${TZ:-America/Toronto}
       - PORT=3001
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-change-this}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
@@ -70,10 +72,12 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ats-redis
-    ports:
-      - "6379:6379"
+    expose:
+      - "6379"
     volumes:
       - redis-data:/data
+    environment:
+      - TZ=${TZ:-America/Toronto}
     networks:
       - ats-network
     restart: unless-stopped
@@ -83,7 +87,67 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    command: redis-server --appendonly yes --save 900 1 --save 300 10 --save 60 10000
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: ats-nginx-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - nginx-logs:/var/log/nginx
+      # Mount SSL certificates if they exist
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /etc/ssl/ats:/etc/ssl/ats:ro
+    environment:
+      - TZ=${TZ:-America/Toronto}
+    networks:
+      - ats-network
+    restart: unless-stopped
+    depends_on:
+      - ats-web
+      - ats-api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/nginx-health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Netdata monitoring
+  netdata:
+    image: netdata/netdata:edge
+    container_name: ats-netdata
+    pid: host
+    network_mode: host
+    restart: unless-stopped
+    cap_add:
+      - SYS_PTRACE
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    volumes:
+      - netdata-config:/etc/netdata
+      - netdata-lib:/var/lib/netdata
+      - netdata-cache:/var/cache/netdata
+      - /:/host/root:ro,rslave
+      - /etc/passwd:/host/etc/passwd:ro
+      - /etc/group:/host/etc/group:ro
+      - /etc/localtime:/etc/localtime:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+      - /var/log:/host/var/log:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - TZ=${TZ:-America/Toronto}
+      - NETDATA_CLAIM_TOKEN=${NETDATA_CLAIM_TOKEN:-}
+      - NETDATA_CLAIM_URL=${NETDATA_CLAIM_URL:-https://app.netdata.cloud}
+      - NETDATA_CLAIM_ROOMS=${NETDATA_CLAIM_ROOMS:-}
 
 # Networks
 networks:
@@ -104,4 +168,16 @@ volumes:
     driver: local
   redis-data:
     name: ats-redis-data
+    driver: local
+  nginx-logs:
+    name: ats-nginx-logs
+    driver: local
+  netdata-config:
+    name: ats-netdata-config
+    driver: local
+  netdata-lib:
+    name: ats-netdata-lib
+    driver: local
+  netdata-cache:
+    name: ats-netdata-cache
     driver: local
