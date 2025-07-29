@@ -1,6 +1,6 @@
 # Example for ATS Repository
 # File: .github/workflows/deploy.yml in your ATS repo
-#
+
 name: 🚀 Manage ATS Game Server
 
 on:
