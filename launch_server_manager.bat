@@ -1,9 +1,6 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-:: Set code page for better character support
-chcp 65001 >nul 2>&1
-
 :: ===========================================
 :: Freddy's ATS Complete Server Manager Launcher
 :: Unified management for ATS game, dedicated server, and Steam packages
@@ -32,36 +29,36 @@ if exist "%ENV_SCRIPT%" (
 
 :MAIN_MENU
 cls
-echo ===========================================
-echo   Freddy's ATS Complete Manager v2.0
-echo ===========================================
-echo   Unified management for everything ATS
-echo ===========================================
+echo ===============================================
+echo     Freddy's ATS Complete Manager v2.0
+echo ===============================================
+echo     Unified management for everything ATS
+echo ===============================================
 echo.
 echo [GAME MANAGEMENT]
-echo 1. Launch ATS Game
-echo 2. Launch ATS with Mods
-echo 3. Launch Steam (ATS Library)
+echo   1. Launch ATS Game
+echo   2. Launch ATS with Mods
+echo   3. Launch Steam (ATS Library)
 echo.
 echo [SERVER MANAGEMENT]
-echo 4. Start Dedicated Server (Quick)
-echo 5. Advanced Server Manager
-echo 6. Check Server Status
-echo 7. Stop All Servers
+echo   4. Start Dedicated Server (Quick)
+echo   5. Advanced Server Manager
+echo   6. Check Server Status
+echo   7. Stop All Servers
 echo.
 echo [STEAM PACKAGE MANAGEMENT]
-echo 8. Install/Update ATS Game
-echo 9. Install/Update Dedicated Server
-echo A. Download Workshop Collection
-echo B. Manage SteamCMD
+echo   8. Install/Update ATS Game
+echo   9. Install/Update Dedicated Server
+echo   A. Download Workshop Collection
+echo   B. Manage SteamCMD
 echo.
 echo [UTILITIES]
-echo C. Environment Configuration
-echo D. Create Desktop Shortcuts
-echo E. System Diagnostics
-echo F. Help and Documentation
+echo   C. Environment Configuration
+echo   D. Create Desktop Shortcuts
+echo   E. System Diagnostics
+echo   F. Help and Documentation
 echo.
-echo 0. Exit
+echo   0. Exit
 echo.
 set /p CHOICE="Select option: "
 
@@ -92,13 +89,13 @@ echo.
 if exist "%GAME_DIR%\bin\win_x64\amtrucks.exe" (
     echo Starting American Truck Simulator...
     start "" "%GAME_DIR%\bin\win_x64\amtrucks.exe"
-    echo ✓ Game launched successfully
+    echo * Game launched successfully
 ) else if exist "%STEAM_EXE%" (
     echo Game not found, launching via Steam...
     start "" "%STEAM_EXE%" -applaunch 270880
-    echo ✓ Game launched via Steam
+    echo * Game launched via Steam
 ) else (
-    echo ❌ Game not found and Steam not available
+    echo ! Game not found and Steam not available
     echo Please install ATS or check paths
 )
 pause
@@ -117,9 +114,9 @@ if exist "%STEAM_EXE%" (
     echo.
     echo Now launching ATS game...
     start "" "%STEAM_EXE%" -applaunch 270880
-    echo ✓ Game with workshop access launched
+    echo * Game with workshop access launched
 ) else (
-    echo ❌ Steam not found, cannot launch with mod support
+    echo ! Steam not found, cannot launch with mod support
 )
 pause
 goto MAIN_MENU
@@ -133,9 +130,9 @@ echo.
 if exist "%STEAM_EXE%" (
     echo Opening Steam ATS library page...
     start "" "%STEAM_EXE%" -url steam://nav/games/details/270880
-    echo ✓ Steam launched to ATS page
+    echo * Steam launched to ATS page
 ) else (
-    echo ❌ Steam not found at expected location
+    echo ! Steam not found at expected location
     echo Please check Steam installation
 )
 pause
@@ -147,14 +144,11 @@ echo ===========================================
 echo   Quick Server Start
 echo ===========================================
 echo.
-if exist "%SCRIPT_DIR%\ats_quick_server.bat" (
-    echo Launching quick ATS server...
-    call "%SCRIPT_DIR%\ats_quick_server.bat"
-) else if exist "%SCRIPT_DIR%\start_ats_dedicated_server.bat" (
+if exist "%SCRIPT_DIR%\start_ats_dedicated_server.bat" (
     echo Launching dedicated server with quick settings...
     call "%SCRIPT_DIR%\start_ats_dedicated_server.bat"
 ) else (
-    echo ❌ Quick server scripts not found
+    echo ! Quick server script not found
     echo Falling back to advanced manager...
     goto ADVANCED_MANAGER
 )
@@ -170,7 +164,7 @@ if exist "%MANAGER_SCRIPT%" (
     echo Launching comprehensive server manager...
     call "%MANAGER_SCRIPT%" %*
 ) else (
-    echo ❌ Advanced manager script not found!
+    echo ! Advanced manager script not found!
     echo Expected: %MANAGER_SCRIPT%
     pause
 )
@@ -186,25 +180,25 @@ echo Checking for running ATS processes...
 echo.
 
 tasklist /FI "IMAGENAME eq amtrucks_server.exe" 2>NUL | find /I /N "amtrucks_server.exe" >nul && (
-    echo ✓ ATS Dedicated Server is RUNNING
+    echo * ATS Dedicated Server is RUNNING
     tasklist /FI "IMAGENAME eq amtrucks_server.exe" | findstr amtrucks_server.exe
 ) || (
-    echo ❌ ATS Dedicated Server is NOT running
+    echo ! ATS Dedicated Server is NOT running
 )
 
 echo.
 tasklist /FI "IMAGENAME eq amtrucks.exe" 2>NUL | find /I /N "amtrucks.exe" >nul && (
-    echo ✓ ATS Game Client is RUNNING
+    echo * ATS Game Client is RUNNING
     tasklist /FI "IMAGENAME eq amtrucks.exe" | findstr amtrucks.exe
 ) || (
-    echo ❌ ATS Game Client is NOT running
+    echo ! ATS Game Client is NOT running
 )
 
 echo.
 tasklist /FI "IMAGENAME eq steam.exe" 2>NUL | find /I /N "steam.exe" >nul && (
-    echo ✓ Steam is RUNNING
+    echo * Steam is RUNNING
 ) || (
-    echo ❌ Steam is NOT running
+    echo ! Steam is NOT running
 )
 
 echo.
@@ -224,10 +218,10 @@ echo   Stopping All Servers
 echo ===========================================
 echo.
 echo Stopping ATS dedicated servers...
-taskkill /F /IM amtrucks_server.exe 2>nul && echo ✓ Dedicated server stopped || echo ℹ No dedicated server running
+taskkill /F /IM amtrucks_server.exe 2>nul && echo * Dedicated server stopped || echo i No dedicated server running
 
 echo Stopping ATS game clients...
-taskkill /F /IM amtrucks.exe 2>nul && echo ✓ Game client stopped || echo ℹ No game client running
+taskkill /F /IM amtrucks.exe 2>nul && echo * Game client stopped || echo i No game client running
 
 echo.
 echo All ATS processes stopped
@@ -256,9 +250,9 @@ echo Launching SteamCMD for ATS game installation...
 "%STEAMCMD_EXE%" +login anonymous +app_update 270880 validate +quit
 
 if !errorlevel! equ 0 (
-    echo ✓ ATS Game installation/update completed
+    echo * ATS Game installation/update completed
 ) else (
-    echo ❌ Installation failed - Error code: !errorlevel!
+    echo ! Installation failed - Error code: !errorlevel!
     echo You may need to login with your Steam account for owned games
 )
 
@@ -287,11 +281,11 @@ echo Launching SteamCMD for dedicated server installation...
 "%STEAMCMD_EXE%" +login anonymous +app_update 1067230 validate +quit
 
 if !errorlevel! equ 0 (
-    echo ✓ ATS Dedicated Server installation/update completed
+    echo * ATS Dedicated Server installation/update completed
     echo.
     echo Server installed to: %SERVER_DIR%
 ) else (
-    echo ❌ Installation failed - Error code: !errorlevel!
+    echo ! Installation failed - Error code: !errorlevel!
 )
 
 pause
@@ -332,7 +326,7 @@ echo ===========================================
 echo.
 echo Current SteamCMD Status:
 if exist "%STEAMCMD_EXE%" (
-    echo ✓ SteamCMD is installed at: %STEAMCMD_DIR%
+    echo * SteamCMD is installed at: %STEAMCMD_DIR%
     echo.
     echo 1. Launch SteamCMD Console
     echo 2. Update SteamCMD
@@ -354,11 +348,11 @@ if exist "%STEAMCMD_EXE%" (
         set /p CONFIRM="Are you sure you want to remove SteamCMD? (Y/N): "
         if /i "!CONFIRM!"=="Y" (
             rmdir /s /q "%STEAMCMD_DIR%" 2>nul
-            echo ✓ SteamCMD removed
+            echo * SteamCMD removed
         )
     )
 ) else (
-    echo ❌ SteamCMD not installed
+    echo ! SteamCMD not installed
     echo.
     echo Would you like to install SteamCMD now?
     set /p INSTALL_CHOICE="Install SteamCMD? (Y/N): "
@@ -381,7 +375,7 @@ if exist "%SCRIPT_DIR%\env_manager.bat" (
     if exist "%BASE_DIR%\.env" (
         start notepad "%BASE_DIR%\.env"
     ) else (
-        echo ❌ Environment file not found
+        echo ! Environment file not found
         echo Creating default .env file...
         call :CREATE_DEFAULT_ENV
         if exist "%BASE_DIR%\.env" start notepad "%BASE_DIR%\.env"
@@ -408,9 +402,9 @@ if exist "%SCRIPT_DIR%\create_desktop_shortcuts.bat" (
     powershell -Command "& {$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('%DESKTOP%\ATS Complete Manager.lnk'); $Shortcut.TargetPath = '%LAUNCHER_PATH%'; $Shortcut.WorkingDirectory = '%BASE_DIR%'; $Shortcut.Description = 'Freddy''s ATS Complete Manager'; $Shortcut.Save()}" 2>nul
     
     if !errorlevel! equ 0 (
-        echo ✓ ATS Complete Manager shortcut created
+        echo * ATS Complete Manager shortcut created
     ) else (
-        echo ❌ Failed to create shortcut
+        echo ! Failed to create shortcut
     )
     
     pause
@@ -432,19 +426,19 @@ if exist "%SCRIPT_DIR%\system_diagnostics.bat" (
     echo Checking paths...
     echo.
     echo Game Directory: %GAME_DIR%
-    if exist "%GAME_DIR%" (echo ✓ Exists) else (echo ❌ Not found)
+    if exist "%GAME_DIR%" (echo * Exists) else (echo ! Not found)
     
     echo Server Directory: %SERVER_DIR%
-    if exist "%SERVER_DIR%" (echo ✓ Exists) else (echo ❌ Not found)
+    if exist "%SERVER_DIR%" (echo * Exists) else (echo ! Not found)
     
     echo Workshop Directory: %WORKSHOP_DIR%
-    if exist "%WORKSHOP_DIR%" (echo ✓ Exists) else (echo ❌ Not found)
+    if exist "%WORKSHOP_DIR%" (echo * Exists) else (echo ! Not found)
     
     echo Steam Executable: %STEAM_EXE%
-    if exist "%STEAM_EXE%" (echo ✓ Exists) else (echo ❌ Not found)
+    if exist "%STEAM_EXE%" (echo * Exists) else (echo ! Not found)
     
     echo SteamCMD: %STEAMCMD_EXE%
-    if exist "%STEAMCMD_EXE%" (echo ✓ Exists) else (echo ❌ Not found)
+    if exist "%STEAMCMD_EXE%" (echo * Exists) else (echo ! Not found)
     
     pause
 )
@@ -460,18 +454,18 @@ echo FREDDY'S ATS COMPLETE MANAGER
 echo =============================
 echo.
 echo This launcher provides unified management for:
-echo • American Truck Simulator game
-echo • ATS Dedicated Server
-echo • Steam Workshop mods
-echo • SteamCMD package management
+echo - American Truck Simulator game
+echo - ATS Dedicated Server
+echo - Steam Workshop mods
+echo - SteamCMD package management
 echo.
 echo KEY FEATURES:
-echo • One-click game and server launching
-echo • Automatic Steam package installation
-echo • Workshop collection management
-echo • Desktop shortcut creation
-echo • Environment configuration
-echo • System diagnostics
+echo - One-click game and server launching
+echo - Automatic Steam package installation
+echo - Workshop collection management
+echo - Desktop shortcut creation
+echo - Environment configuration
+echo - System diagnostics
 echo.
 echo GETTING STARTED:
 echo 1. Use option 8-9 to install ATS game/server if needed
@@ -480,14 +474,14 @@ echo 3. Use option D to create desktop shortcuts
 echo 4. Use option 1-7 for daily game/server management
 echo.
 echo REQUIREMENTS:
-echo • Windows 10/11
-echo • Steam (for game launching and mods)
-echo • Internet connection (for downloads)
+echo - Windows 10/11
+echo - Steam (for game launching and mods)
+echo - Internet connection (for downloads)
 echo.
 echo SUPPORT:
-echo • Check environment with option E
-echo • View documentation in /docs folder
-echo • Report issues on GitHub
+echo - Check environment with option E
+echo - View documentation in /docs folder
+echo - Report issues on GitHub
 echo.
 pause
 goto MAIN_MENU
@@ -522,7 +516,7 @@ if exist "%STEAMCMD_DIR%\steamcmd.zip" (
     powershell -Command "& {Invoke-WebRequest -Uri 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip' -OutFile '%STEAMCMD_DIR%\steamcmd.zip'}"
     
     if !errorlevel! neq 0 (
-        echo ❌ Failed to download SteamCMD
+        echo ! Failed to download SteamCMD
         exit /b 1
     )
 )
@@ -531,7 +525,7 @@ echo Extracting SteamCMD...
 powershell -Command "& {Expand-Archive -Path '%STEAMCMD_DIR%\steamcmd.zip' -DestinationPath '%STEAMCMD_DIR%' -Force}"
 
 if !errorlevel! neq 0 (
-    echo ❌ Failed to extract SteamCMD
+    echo ! Failed to extract SteamCMD
     exit /b 1
 )
 
@@ -539,10 +533,10 @@ echo Initializing SteamCMD...
 "%STEAMCMD_EXE%" +quit
 
 if !errorlevel! equ 0 (
-    echo ✓ SteamCMD installed successfully
+    echo * SteamCMD installed successfully
     exit /b 0
 ) else (
-    echo ❌ SteamCMD initialization failed
+    echo ! SteamCMD initialization failed
     exit /b 1
 )
 
