@@ -33,16 +33,17 @@ on:
         required: false
         type: choice
         options:
+          - 'g6-nanode-1'          # 1GB RAM - $5/month (sufficient for lightweight game server)
           - 'g6-standard-1'        # 2GB RAM - $12/month
           - 'g6-standard-2'        # 4GB RAM - $20/month
-          - 'g6-standard-4'        # 8GB RAM - $40/month (recommended for game server)
-        default: 'g6-standard-4'
+          - 'g6-standard-4'        # 8GB RAM - $40/month
+        default: 'g6-nanode-1'
       
       cleanup_old_resources:
         description: 'Clean up old servers before deployment'
         required: false
         type: boolean
-        default: false
+        default: true  # Enable cleanup by default during development
       
       enable_monitoring:
         description: 'Enable Netdata monitoring'
@@ -68,9 +69,109 @@ on:
         type: string
 
 jobs:
+  # Pre-deployment cleanup for development
+  cleanup-old-resources:
+    name: 🧹 Cleanup Old Resources
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || inputs.cleanup_old_resources == true
+    steps:
+      - name: 🧹 Cleanup Tailscale and Linode Resources
+        env:
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+        run: |
+          echo "🧹 Cleaning up old ATS resources..."
+          
+          # Install dependencies
+          sudo apt-get update && sudo apt-get install -y curl jq
+          
+          # Cleanup Tailscale devices first
+          if [[ -n "$TAILSCALE_OAUTH_CLIENT_ID" && -n "$TAILSCALE_OAUTH_SECRET" ]]; then
+            echo "🔗 Cleaning up old Tailscale devices..."
+            
+            # Get OAuth token
+            TOKEN_RESPONSE=$(curl -s -X POST "https://api.tailscale.com/api/v2/oauth/token" \
+              -u "$TAILSCALE_OAUTH_CLIENT_ID:$TAILSCALE_OAUTH_SECRET" \
+              -d "grant_type=client_credentials")
+            
+            ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
+            
+            if [[ -n "$ACCESS_TOKEN" ]]; then
+              echo "✅ Got Tailscale OAuth token"
+              
+              # Get tailnet (assuming personal account format)
+              TAILNET="${TAILSCALE_OAUTH_CLIENT_ID%%.*}"
+              
+              # List and remove old ATS devices
+              echo "🔍 Looking for old ATS devices..."
+              
+              # Get devices list and handle null response
+              DEVICES_RESPONSE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+                "https://api.tailscale.com/api/v2/tailnet/$TAILNET/devices")
+              
+              # Check if we got a valid response with devices
+              if echo "$DEVICES_RESPONSE" | jq -e '.devices' >/dev/null 2>&1; then
+                DEVICES=$(echo "$DEVICES_RESPONSE" | jq -r '.devices[]? | select(.hostname | startswith("ats")) | .id // empty' | grep -v '^$')
+                
+                if [[ -n "$DEVICES" ]]; then
+                  echo "Found ATS devices to remove..."
+                  for device_id in $DEVICES; do
+                    if [[ -n "$device_id" ]]; then
+                      echo "🗑️ Removing old Tailscale device: $device_id"
+                      curl -s -X DELETE \
+                        -H "Authorization: Bearer $ACCESS_TOKEN" \
+                        "https://api.tailscale.com/api/v2/device/$device_id" || echo "Failed to remove device $device_id"
+                    fi
+                  done
+                else
+                  echo "No ATS devices found to remove"
+                fi
+              else
+                echo "⚠️ No devices array in Tailscale response or API error"
+              fi
+            else
+              echo "⚠️ Failed to get Tailscale OAuth token"
+            fi
+          else
+            echo "⚠️ Tailscale OAuth credentials not available"
+          fi
+          
+          # Cleanup Linode servers
+          if [[ -n "$LINODE_CLI_TOKEN" ]]; then
+            echo "🖥️ Cleaning up old Linode servers..."
+            
+            # Install linode-cli
+            pip install linode-cli
+            
+            # Configure linode-cli
+            echo "[DEFAULT]
+          token = $LINODE_CLI_TOKEN" > ~/.linode-cli
+            
+            # Remove old ATS servers
+            echo "🔍 Looking for old ATS servers..."
+            
+            OLD_SERVERS=$(linode-cli linodes list --json | jq -r '.[] | select(.label | startswith("ats")) | .id')
+            
+            for server_id in $OLD_SERVERS; do
+              if [[ -n "$server_id" ]]; then
+                echo "🗑️ Removing old Linode server: $server_id (ats)"
+                linode-cli linodes delete "$server_id" --json || echo "Failed to remove server $server_id"
+                # Wait a bit between deletions
+                sleep 5
+              fi
+            done
+          else
+            echo "⚠️ Linode CLI token not available"
+          fi
+          
+          echo "✅ Cleanup completed"
+
   # ATS Game Server Deployment
   deploy-ats:
     name: 🎮 Deploy ATS Game Server
+    needs: cleanup-old-resources
+    if: always() && (needs.cleanup-old-resources.result == 'success' || needs.cleanup-old-resources.result == 'skipped')
     uses: nuniesmith/actions/.github/workflows/deploy.yml@main
     with:
       service_name: 'ats'
@@ -79,8 +180,8 @@ jobs:
       skip_tests: ${{ inputs.skip_tests || false }}
       skip_docker_build: ${{ inputs.skip_docker_build || false }}
       build_docker_on_changes: true
-      overwrite_server: ${{ inputs.cleanup_old_resources || false }}
-      server_type: ${{ inputs.server_type || 'g6-standard-4' }}
+      overwrite_server: true  # Always cleanup during development
+      server_type: ${{ inputs.server_type || 'g6-nanode-1' }}  # $5/month basic server - perfect for 2-user game server
       target_region: ${{ inputs.target_region || 'ca-central' }}
       domain_suffix: '7gram.xyz'
       enable_monitoring: ${{ inputs.enable_monitoring || true }}
@@ -125,8 +226,8 @@ jobs:
           echo "🎮 **ATS Game Server:**"
           echo "  • Server ID: $SERVER_ID"
           echo "  • Server IP: $SERVER_IP"
-          echo "  • Server Type: ${{ inputs.server_type || 'g6-standard-4' }} (8GB RAM)"
-          echo "  • Cost: $40/month"
+          echo "  • Server Type: ${{ inputs.server_type || 'g6-nanode-1' }} (1GB RAM)"
+          echo "  • Cost: \$5/month (reduced from \$40/month for lightweight 2-user game server)"
           echo "  • Region: ${{ inputs.target_region || 'ca-central' }}"
           echo ""
           echo "🔗 **Access URLs:**"
@@ -166,6 +267,7 @@ jobs:
       - name: 🧪 Test ATS Game Server
         env:
           SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
+          SSHPASS: ${{ secrets.ACTIONS_USER_PASSWORD }}
         run: |
           echo "🧪 Testing ATS game server..."
           
@@ -648,6 +750,7 @@ jobs:
           TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
           TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
           SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
+          SSHPASS: ${{ secrets.ACTIONS_USER_PASSWORD }}
         if: env.TAILSCALE_OAUTH_CLIENT_ID != '' && env.TAILSCALE_OAUTH_SECRET != ''
         run: |
           echo "🐳 Configuring Tailscale to advertise Docker subnets on ATS server..."
@@ -673,7 +776,7 @@ jobs:
           echo "🐳 Configuring Docker subnet advertisement on ATS server..."
           
           # SSH to server and configure Tailscale subnet routing
-          sshpass -p "${{ secrets.ACTIONS_USER_PASSWORD }}" ssh -o StrictHostKeyChecking=no ats_user@$SERVER_HOST "
+          sshpass -e ssh -o StrictHostKeyChecking=no ats_user@$SERVER_HOST "
             echo '🔍 Getting Docker network information...'
             
             # Get Docker bridge network CIDR
