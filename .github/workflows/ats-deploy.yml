@@ -93,34 +93,66 @@ jobs:
             # Get the tailnet name
             TAILNET="${{ secrets.TAILSCALE_TAILNET }}"
             if [[ -z "$TAILNET" ]]; then
-              echo "⚠️ TAILSCALE_TAILNET secret not set. Please set it to your tailnet name"
-              exit 0
+              echo "⚠️ TAILSCALE_TAILNET secret not set, using default API endpoint"
+              DEVICES_URL="https://api.tailscale.com/api/v2/devices"
+            else
+              echo "🔍 Using tailnet: $TAILNET"
+              DEVICES_URL="https://api.tailscale.com/api/v2/tailnet/$TAILNET/devices"
             fi
-            echo "🔍 Using tailnet: $TAILNET"
             
-            # Get devices list and handle null response
-            DEVICES_RESPONSE=$(curl -s -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" \
-              "https://api.tailscale.com/api/v2/tailnet/$TAILNET/devices")
+            echo "🌐 Fetching devices from: $DEVICES_URL"
+            DEVICES_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" "$DEVICES_URL" 2>/dev/null || echo "CURL_FAILED")
+            
+            # Extract HTTP status code
+            HTTP_CODE=$(echo "$DEVICES_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+            DEVICES_JSON=$(echo "$DEVICES_RESPONSE" | sed '/HTTP_CODE:/d')
+            
+            echo "🔍 API Response Code: $HTTP_CODE"
             
             # Check if we got a valid response with devices
-            if echo "$DEVICES_RESPONSE" | jq -e '.devices' >/dev/null 2>&1; then
-              DEVICES=$(echo "$DEVICES_RESPONSE" | jq -r '.devices[]? | select(.hostname | startswith("ats")) | .id // empty' | grep -v '^$')
+            if [[ "$HTTP_CODE" == "200" ]] && echo "$DEVICES_JSON" | jq -e '.devices' >/dev/null 2>&1; then
+              # Find ATS devices (including numbered variants like ats-1, ats-2, etc.)
+              DEVICES=$(echo "$DEVICES_JSON" | jq -r '.devices[]? | select((.hostname // .name) | test("^ats(-[0-9]+)?$"; "i")) | .id // empty' | grep -v '^$' | head -10)
               
               if [[ -n "$DEVICES" ]]; then
                 echo "Found ATS devices to remove..."
+                REMOVED_COUNT=0
                 for device_id in $DEVICES; do
                   if [[ -n "$device_id" ]]; then
-                    echo "🗑️ Removing old Tailscale device: $device_id"
-                    curl -s -X DELETE \
+                    # Get device info
+                    DEVICE_INFO=$(echo "$DEVICES_JSON" | jq -r --arg id "$device_id" '.devices[]? | select(.id == $id) | "\(.hostname // .name // "unknown") (\(.addresses[0] // "no-ip"))"')
+                    echo "🗑️ Removing old Tailscale device: $device_id - $DEVICE_INFO"
+                    
+                    DELETE_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X DELETE \
                       -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" \
-                      "https://api.tailscale.com/api/v2/device/$device_id" || echo "Failed to remove device $device_id"
+                      "https://api.tailscale.com/api/v2/device/$device_id" 2>/dev/null || echo "CURL_FAILED")
+                    
+                    DELETE_CODE=$(echo "$DELETE_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+                    
+                    if [[ "$DELETE_CODE" == "200" || "$DELETE_CODE" == "204" ]]; then
+                      echo "   ✅ Successfully removed"
+                      ((REMOVED_COUNT++))
+                    else
+                      echo "   ❌ Failed to remove device $device_id (HTTP: $DELETE_CODE)"
+                    fi
+                    
+                    # Rate limiting
+                    sleep 1
                   fi
                 done
+                echo "✅ Removed $REMOVED_COUNT ATS devices"
               else
-                echo "No ATS devices found to remove"
+                echo "ℹ️ No ATS devices found to remove"
               fi
+            elif [[ "$HTTP_CODE" == "401" ]]; then
+              echo "❌ Tailscale API authentication failed - check TAILSCALE_AUTH_KEY"
+            elif [[ "$HTTP_CODE" == "403" ]]; then
+              echo "❌ Tailscale API access forbidden - check API key permissions"
+            elif [[ "$HTTP_CODE" == "404" ]]; then
+              echo "❌ Tailscale tailnet not found - check TAILSCALE_TAILNET value"
             else
-              echo "⚠️ No devices array in Tailscale response or API error"
+              echo "⚠️ Tailscale API error - HTTP: $HTTP_CODE"
+              echo "Response: $DEVICES_JSON" | head -100
             fi
           else
             echo "⚠️ Tailscale API token not available"
