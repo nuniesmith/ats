@@ -134,7 +134,7 @@ services:
       start_period: 30s
     command: redis-server --appendonly yes --save 900 1 --save 300 10 --save 60 10000
 
-  # Nginx Reverse Proxy
+  # Nginx Reverse Proxy with SSL
   nginx:
     image: nginx:alpine
     container_name: ats-nginx-proxy
@@ -142,13 +142,15 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/opt/ats/ssl:ro
+      - /var/www/certbot:/var/www/certbot:ro
       - nginx-logs:/var/log/nginx
-      # Mount SSL certificates if they exist
-      - /etc/letsencrypt:/etc/letsencrypt:ro
-      - /etc/ssl/ats:/etc/ssl/ats:ro
+      # Include nginx main config if exists
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     environment:
       - TZ=${TZ:-America/Toronto}
+      - DOMAIN_NAME=${DOMAIN_NAME:-ats.7gram.xyz}
     networks:
       - ats-network
     restart: unless-stopped
@@ -156,7 +158,7 @@ services:
       - ats-web
       - ats-api
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/nginx-health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health", "||", "exit", "1"]
       interval: 30s
       timeout: 10s
       retries: 3

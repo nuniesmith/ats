@@ -111,17 +111,44 @@ jobs:
             
             # Check if we got a valid response with devices
             if [[ "$HTTP_CODE" == "200" ]] && echo "$DEVICES_JSON" | jq -e '.devices' >/dev/null 2>&1; then
-              # Find ATS devices (including numbered variants like ats-1, ats-2, etc.)
-              DEVICES=$(echo "$DEVICES_JSON" | jq -r '.devices[]? | select((.hostname // .name) | test("^ats(-[0-9]+)?$"; "i")) | .id // empty' | grep -v '^$' | head -10)
+              # Multiple patterns to catch all ATS variants
+              CLEANUP_PATTERNS=(
+                "^ats(-[0-9]+)?$"
+                "^ats$" 
+                "^ats-"
+                "ats"
+              )
               
-              if [[ -n "$DEVICES" ]]; then
+              TOTAL_REMOVED=0
+              ALL_FOUND_DEVICES=""
+              
+              # Collect all matching device IDs
+              for pattern in "${CLEANUP_PATTERNS[@]}"; do
+                echo "🔍 Searching for ATS devices with pattern: $pattern"
+                
+                DEVICES=$(echo "$DEVICES_JSON" | jq -r --arg pattern "$pattern" '
+                  .devices[]? | 
+                  select(
+                    (.hostname // .name | test($pattern; "i")) or 
+                    (.name // .hostname | test($pattern; "i"))
+                  ) | 
+                  .id // empty' | grep -v '^$')
+                
+                if [[ -n "$DEVICES" ]]; then
+                  ALL_FOUND_DEVICES="$ALL_FOUND_DEVICES $DEVICES"
+                fi
+              done
+              
+              # Remove duplicates
+              UNIQUE_DEVICES=$(echo "$ALL_FOUND_DEVICES" | tr ' ' '\n' | sort -u | grep -v '^$' || true)
+              
+              if [[ -n "$UNIQUE_DEVICES" ]]; then
                 echo "Found ATS devices to remove..."
-                REMOVED_COUNT=0
-                for device_id in $DEVICES; do
+                for device_id in $UNIQUE_DEVICES; do
                   if [[ -n "$device_id" ]]; then
                     # Get device info
                     DEVICE_INFO=$(echo "$DEVICES_JSON" | jq -r --arg id "$device_id" '.devices[]? | select(.id == $id) | "\(.hostname // .name // "unknown") (\(.addresses[0] // "no-ip"))"')
-                    echo "🗑️ Removing old Tailscale device: $device_id - $DEVICE_INFO"
+                    echo "🗑️ Removing Tailscale device: $device_id - $DEVICE_INFO"
                     
                     DELETE_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X DELETE \
                       -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" \
@@ -131,9 +158,21 @@ jobs:
                     
                     if [[ "$DELETE_CODE" == "200" || "$DELETE_CODE" == "204" ]]; then
                       echo "   ✅ Successfully removed"
-                      ((REMOVED_COUNT++))
+                      ((TOTAL_REMOVED++))
                     else
-                      echo "   ❌ Failed to remove device $device_id (HTTP: $DELETE_CODE)"
+                      echo "   ⚠️ Trying alternative endpoint (HTTP: $DELETE_CODE)..."
+                      # Try alternative endpoint
+                      ALT_DELETE_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X DELETE \
+                        -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" \
+                        "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices/$device_id" 2>/dev/null || echo "CURL_FAILED")
+                      
+                      ALT_DELETE_CODE=$(echo "$ALT_DELETE_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+                      if [[ "$ALT_DELETE_CODE" == "200" || "$ALT_DELETE_CODE" == "204" ]]; then
+                        echo "   ✅ Successfully removed via alternative endpoint"
+                        ((TOTAL_REMOVED++))
+                      else
+                        echo "   ❌ Failed to remove device $device_id (Primary: $DELETE_CODE, Alt: $ALT_DELETE_CODE)"
+                      fi
                     fi
                     
                     # Rate limiting
