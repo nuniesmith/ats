@@ -40,7 +40,7 @@ Domain: ats.7gram.xyz
 ## 🚀 **Deployment Process**
 
 1. **GitHub Actions Workflow Triggers**
-2. **Check for Existing Linode Server** (via `LINODE_TOKEN`)
+2. **Check for Existing Linode Server** (via `LINODE_CLI_TOKEN`)
 3. **If Server Exists**:
    - Connect to server via **Public IP** (SSH access)
    - Deploy web application files
@@ -53,7 +53,7 @@ Domain: ats.7gram.xyz
 
 | Secret | Usage | Access Method |
 |--------|-------|---------------|
-| `LINODE_TOKEN` | Check/manage servers | Linode CLI API |
+| `LINODE_CLI_TOKEN` | Check/manage servers | Linode CLI API |
 | `ATS_ROOT_PASSWORD` | Server root access | SSH to public IP |
 | `ACTIONS_USER_PASSWORD` | Deploy user access | SSH to public IP |
 | `TAILSCALE_AUTH_KEY` | Join private network | Tailscale connect |

@@ -74,7 +74,7 @@ jobs:
       - name: 🔐 Validate Required Secrets
         id: validate-secrets
         env:
-          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
           ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
@@ -87,7 +87,7 @@ jobs:
           
           MISSING_SECRETS=()
           
-          [[ -z "$LINODE_TOKEN" ]] && MISSING_SECRETS+=("LINODE_TOKEN")
+          [[ -z "$LINODE_CLI_TOKEN" ]] && MISSING_SECRETS+=("LINODE_CLI_TOKEN")
           [[ -z "$ATS_ROOT_PASSWORD" ]] && MISSING_SECRETS+=("ATS_ROOT_PASSWORD")
           [[ -z "$TAILSCALE_AUTH_KEY" ]] && MISSING_SECRETS+=("TAILSCALE_AUTH_KEY")
           [[ -z "$JWT_SECRET" ]] && MISSING_SECRETS+=("JWT_SECRET")
@@ -208,12 +208,12 @@ jobs:
       - name: 🔍 Check Existing Linode Servers
         id: check-server
         env:
-          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
         run: |
           echo "🔍 Checking for existing ATS servers..."
           
           # Skip if no Linode token provided
-          if [[ -z "$LINODE_TOKEN" ]]; then
+          if [[ -z "$LINODE_CLI_TOKEN" ]]; then
             echo "⚠️ No Linode token provided - skipping server check"
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "ip=" >> $GITHUB_OUTPUT
@@ -223,7 +223,7 @@ jobs:
           
           # Check for existing servers using API
           echo "🔍 Querying Linode API for existing servers..."
-          SERVERS_RESPONSE=$(curl -H "Authorization: Bearer $LINODE_TOKEN" \
+          SERVERS_RESPONSE=$(curl -H "Authorization: Bearer $LINODE_CLI_TOKEN" \
             "https://api.linode.com/v4/linode/instances" 2>/dev/null)
           
           if [[ $? -ne 0 ]]; then
@@ -299,7 +299,7 @@ jobs:
       - name: 🔨 Create Linode Server
         id: create
         env:
-          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
           ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
         run: |
           echo "🔨 Creating new ATS server..."
@@ -311,7 +311,7 @@ jobs:
           mkdir -p ~/.config/linode-cli
           cat > ~/.config/linode-cli/config << EOF
           [DEFAULT]
-          token = $LINODE_TOKEN
+          token = $LINODE_CLI_TOKEN
           region = ${{ env.TARGET_REGION }}
           type = ${{ env.SERVER_TYPE }}
           image = linode/arch
@@ -319,11 +319,11 @@ jobs:
           EOF
           
           # Set LINODE_CLI_TOKEN environment variable to avoid interactive prompts
-          export LINODE_CLI_TOKEN="$LINODE_TOKEN"
+          export LINODE_CLI_TOKEN="$LINODE_CLI_TOKEN"
           
           # Create the server using API directly to avoid CLI configuration issues
           echo "🔨 Creating server via Linode API..."
-          RESULT=$(curl -H "Authorization: Bearer $LINODE_TOKEN" \
+          RESULT=$(curl -H "Authorization: Bearer $LINODE_CLI_TOKEN" \
             -H "Content-Type: application/json" \
             -X POST "https://api.linode.com/v4/linode/instances" \
             -d "{
@@ -1424,18 +1424,18 @@ jobs:
     steps:
       - name: 🧹 Cleanup Failed Server
         env:
-          LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
         run: |
           echo "🧹 Cleaning up failed deployment..."
           
-          if [[ -n "$LINODE_TOKEN" ]]; then
+          if [[ -n "$LINODE_CLI_TOKEN" ]]; then
             # Get the server ID for cleanup
             if [[ "${{ needs.create-server.result }}" == "success" ]]; then
               SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
               echo "🔍 Looking for server with IP: $SERVER_IP"
               
               # Find server by IP and delete it
-              SERVERS_RESPONSE=$(curl -s -H "Authorization: Bearer $LINODE_TOKEN" \
+              SERVERS_RESPONSE=$(curl -s -H "Authorization: Bearer $LINODE_CLI_TOKEN" \
                 "https://api.linode.com/v4/linode/instances")
               
               SERVER_ID=$(echo "$SERVERS_RESPONSE" | jq -r ".data[] | select(.ipv4[]? == \"$SERVER_IP\") | .id")
@@ -1444,7 +1444,7 @@ jobs:
                 echo "🗑️ Deleting failed server (ID: $SERVER_ID, IP: $SERVER_IP)..."
                 
                 DELETE_RESPONSE=$(curl -s -X DELETE \
-                  -H "Authorization: Bearer $LINODE_TOKEN" \
+                  -H "Authorization: Bearer $LINODE_CLI_TOKEN" \
                   "https://api.linode.com/v4/linode/instances/$SERVER_ID")
                 
                 if [[ $? -eq 0 ]]; then

@@ -2,7 +2,7 @@
 # =================================================
 
 # 🏗️ Core Infrastructure Secrets
-LINODE_TOKEN=                    # Linode API token for server provisioning
+LINODE_CLI_TOKEN=                    # Linode API token for server provisioning
 CLOUDFLARE_API_TOKEN=           # Cloudflare API token for DNS management  
 CLOUDFLARE_ZONE_ID=             # Zone ID for 7gram.xyz domain
 TAILSCALE_AUTH_KEY=             # Tailscale auth key for private networking (ephemeral, reusable)

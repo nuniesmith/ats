@@ -1,4 +1,45 @@
 services:
+  # ATS Dedicated Game Server
+  ats-server:
+    image: ats-server-fixed
+    container_name: ats-dedicated-server
+    ports:
+      - "27015:27015/tcp"  # ATS multiplayer port
+      - "27015:27015/udp"  # ATS multiplayer port UDP
+    volumes:
+      - ats-server-data:/app/data
+      - ats-server-logs:/app/logs
+      - ats-server-config:/app/config
+      - ./config/server_config.sii:/app/config/server_config.sii:ro
+      - ./config/server_packages.sii:/app/config/server_packages.sii:ro
+      - ./config/server_packages.dat:/app/config/server_packages.dat:ro
+    environment:
+      - TZ=${TZ:-America/Toronto}
+      - ATS_SERVER_NAME=${ATS_SERVER_NAME:-ATS Dedicated Server}
+      - ATS_SERVER_PASSWORD=${ATS_SERVER_PASSWORD:-ruby}
+      - ATS_MAX_PLAYERS=${ATS_MAX_PLAYERS:-8}
+      - ATS_MAP=${ATS_MAP:-/home/profiles/multiplayer}
+      - ATS_WELCOME_MESSAGE=${ATS_WELCOME_MESSAGE:-Welcome to our ATS server!}
+      - STEAM_COLLECTION_ID=${STEAM_COLLECTION_ID:-3530633316}
+      - ATS_LOGON_TOKEN=${ATS_LOGON_TOKEN:-}
+      - ATS_SERVER_LOGON_TOKEN=${ATS_SERVER_LOGON_TOKEN:-}
+      - ATS_SERVER_PORT=27015
+      - ATS_QUERY_PORT=27016
+      - ATS_ENABLE_PVP=${ATS_ENABLE_PVP:-false}
+      - ATS_SPEED_LIMITER=${ATS_SPEED_LIMITER:-true}
+      - ATS_FUEL_CONSUMPTION=${ATS_FUEL_CONSUMPTION:-1.0}
+    networks:
+      - ats-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "netstat", "-an", "|", "grep", ":27015"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 120s
+    depends_on:
+      - redis
+
   # React Web Application
   ats-web:
     image: ${WEB_IMAGE:-nuniesmith/ats:web-latest}
@@ -44,6 +85,8 @@ services:
       - JWT_SECRET=${JWT_SECRET:-your-jwt-secret-change-this}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost}
       - ATS_SERVER_PATH=/app/ats-server
+      - ATS_DEDICATED_SERVER_HOST=ats-server
+      - ATS_DEDICATED_SERVER_PORT=27015
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
       - CLOUDFLARE_ZONE_ID=${CLOUDFLARE_ZONE_ID:-}
       - DOMAIN_NAME=${DOMAIN_NAME:-ats.7gram.xyz}
@@ -67,6 +110,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      ats-server:
+        condition: service_started
 
   # Redis for session storage
   redis:
@@ -157,6 +202,15 @@ networks:
 
 # Persistent volumes
 volumes:
+  ats-server-data:
+    name: ats-server-data
+    driver: local
+  ats-server-logs:
+    name: ats-server-logs
+    driver: local
+  ats-server-config:
+    name: ats-server-config
+    driver: local
   ats-data:
     name: ats-data
     driver: local

@@ -818,7 +818,7 @@ jobs:
           # Configure Linode CLI first to avoid interactive prompts
           echo "🔧 Pre-configuring Linode CLI..."
           rm -rf ~/.config/linode-cli
-          LINODE_TOKEN="${{ secrets.LINODE_CLI_TOKEN }}"
+          LINODE_CLI_TOKEN="${{ secrets.LINODE_CLI_TOKEN }}"
           
           # Create config directory
           mkdir -p ~/.config/linode-cli
@@ -832,7 +832,7 @@ jobs:
           echo "image = linode/arch" >> ~/.config/linode-cli/config
           echo "authorized_users = " >> ~/.config/linode-cli/config
           echo "authorized_keys = " >> ~/.config/linode-cli/config
-          echo "token = $LINODE_TOKEN" >> ~/.config/linode-cli/config
+          echo "token = $LINODE_CLI_TOKEN" >> ~/.config/linode-cli/config
           chmod 600 ~/.config/linode-cli/config
           
           echo "✅ Linode CLI configuration created successfully"
@@ -853,7 +853,7 @@ jobs:
           # Test only import, don't run any CLI commands that might trigger interactive mode
           
           # First, ensure we don't trigger interactive mode by setting CLI environment properly
-          export LINODE_CLI_TOKEN="$LINODE_TOKEN"
+          export LINODE_CLI_TOKEN="$LINODE_CLI_TOKEN"
           
           # Test module import without executing CLI commands
           if python3 -c "import sys; sys.path.insert(0, '$USER_SITE_PACKAGES'); import linodecli" 2>/dev/null; then

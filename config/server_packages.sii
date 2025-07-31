@@ -1,6 +1,6 @@
 SiiNunit
 {
-server_packages_info : _nameless.229.9564.61e0 {
+server_packages_info : _nameless.1d8.85be.3d00 {
  version: 1
  dlc_essential_list: 0
  dlc_non_essential_list: 14
@@ -18,12 +18,221 @@ server_packages_info : _nameless.229.9564.61e0 {
  dlc_non_essential_list[11]: 55132751433
  dlc_non_essential_list[12]: 24801833
  dlc_non_essential_list[13]: 74845097
- mod_list: 0
+ mod_list: 19
+ mod_list[0]: _nameless.1d5.c9f2.90b0
+ mod_list[1]: _nameless.1d5.c9f2.8ed0
+ mod_list[2]: _nameless.1d5.c9f2.8630
+ mod_list[3]: _nameless.1d5.c9f2.8c90
+ mod_list[4]: _nameless.1d5.c9f2.9950
+ mod_list[5]: _nameless.1d5.c9f2.8b70
+ mod_list[6]: _nameless.1d5.c9f2.9110
+ mod_list[7]: _nameless.1d5.c9f2.8cf0
+ mod_list[8]: _nameless.1d5.c9f2.9b30
+ mod_list[9]: _nameless.1d5.c9f2.8390
+ mod_list[10]: _nameless.1d5.c9f2.9290
+ mod_list[11]: _nameless.1d5.c9f2.92f0
+ mod_list[12]: _nameless.1d5.c9f2.8ab0
+ mod_list[13]: _nameless.1d5.c9f2.9650
+ mod_list[14]: _nameless.1d5.c9f2.9710
+ mod_list[15]: _nameless.1d5.c9f2.9830
+ mod_list[16]: _nameless.1d5.c9f2.9590
+ mod_list[17]: _nameless.1d5.c9f2.8810
+ mod_list[18]: _nameless.1d5.c9f2.9350
  map_name: "/map/usa.mbd"
  map_dimensions: (-31744000, -19456000, 8192000, 19456000)
  roads_data_file_name: "/home/server_packages.dat"
- time_stamp: 1753224104
+ time_stamp: 1753843672
  time_compression: 16.345001
+}
+
+server_mod_detail : _nameless.1d5.c9f2.90b0 {
+ package_name: "mod_workshop_package.0000000027A836F0"
+ mod_name: "Real Eaton Fuller Transm"
+ checksum: 2994429884826677498
+ mod_id: 665335536
+ workshop_mod: true
+ optional_mod: true
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.8ed0 {
+ package_name: "mod_workshop_package.00000000B8F4DFFC"
+ mod_name: "Realistic Brutal Graphic"
+ checksum: 12207953421709936069
+ mod_id: 3103055868
+ workshop_mod: true
+ optional_mod: true
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.8630 {
+ package_name: "mod_workshop_package.0000000026E9432E"
+ mod_name: "Realistic Mirror FOV"
+ checksum: 6629518746020361062
+ mod_id: 652821294
+ workshop_mod: true
+ optional_mod: true
+ full_name: true
+}
+
+server_mod_detail : _nameless.1d5.c9f2.8c90 {
+ package_name: "mod_workshop_package.00000000865C8FDE"
+ mod_name: "Realistic Truck Physics "
+ checksum: 2994429884826677498
+ mod_id: 2254213086
+ workshop_mod: true
+ optional_mod: true
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9950 {
+ package_name: "mod_workshop_package.000000002E5EF2C3"
+ mod_name: "Realistic Vehicle Lights"
+ checksum: 2994429884826677498
+ mod_id: 777974467
+ workshop_mod: true
+ optional_mod: true
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.8b70 {
+ package_name: "mod_workshop_package.000000009C227DC6"
+ mod_name: "Reverse Lights - farther"
+ checksum: 7770791010533417048
+ mod_id: 2619506118
+ workshop_mod: true
+ optional_mod: true
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9110 {
+ package_name: "mod_workshop_package.000000002F436F83"
+ mod_name: "SCS Long Chassis + 625HP"
+ checksum: 14089853508840269861
+ mod_id: 792948611
+ workshop_mod: true
+ optional_mod: false
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.8cf0 {
+ package_name: "mod_workshop_package.0000000026E02B47"
+ mod_name: "SiSL's Mega Pack"
+ checksum: 15754159148385529700
+ mod_id: 652225351
+ workshop_mod: true
+ optional_mod: false
+ full_name: true
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9b30 {
+ package_name: "mod_workshop_package.00000000A5B9F607"
+ mod_name: "Real World Signs & Logos"
+ checksum: 6988207513257562554
+ mod_id: 2780427783
+ workshop_mod: true
+ optional_mod: false
+ full_name: true
+}
+
+server_mod_detail : _nameless.1d5.c9f2.8390 {
+ package_name: "mod_workshop_package.000000003182EB0E"
+ mod_name: "Sound Fixes Pack v25.32 "
+ checksum: 2994429884826677498
+ mod_id: 830663438
+ workshop_mod: true
+ optional_mod: true
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9290 {
+ package_name: "mod_workshop_package.000000008A17812D"
+ mod_name: "Real companies, gas stat"
+ checksum: 3844342574820209165
+ mod_id: 2316796205
+ workshop_mod: true
+ optional_mod: false
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.92f0 {
+ package_name: "mod_workshop_package.00000000CC98B030"
+ mod_name: "Box Trailer Enhanced"
+ checksum: 16736394767546302492
+ mod_id: 3432558640
+ workshop_mod: true
+ optional_mod: true
+ full_name: true
+}
+
+server_mod_detail : _nameless.1d5.c9f2.8ab0 {
+ package_name: "mod_workshop_package.00000000D1A26348"
+ mod_name: "CAT 3406E 2WS Straight p"
+ checksum: 17682663760937426239
+ mod_id: 3517080392
+ workshop_mod: true
+ optional_mod: true
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9650 {
+ package_name: "mod_workshop_package.00000000C28FF35F"
+ mod_name: "Cummins ISX Straight pip"
+ checksum: 3749935468922041035
+ mod_id: 3264213855
+ workshop_mod: true
+ optional_mod: false
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9710 {
+ package_name: "mod_workshop_package.000000008B6B11A0"
+ mod_name: "Cummins N14 Sound & Engi"
+ checksum: 2293377039591645999
+ mod_id: 2339049888
+ workshop_mod: true
+ optional_mod: false
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9830 {
+ package_name: "mod_workshop_package.000000009524955E"
+ mod_name: "Heatshields For SCS 389 "
+ checksum: 7655048525304905669
+ mod_id: 2502202718
+ workshop_mod: true
+ optional_mod: false
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9590 {
+ package_name: "mod_workshop_package.000000009CF6E110"
+ mod_name: "JC Amateur Sound Effects"
+ checksum: 506936351348770728
+ mod_id: 2633425168
+ workshop_mod: true
+ optional_mod: true
+ full_name: false
+}
+
+server_mod_detail : _nameless.1d5.c9f2.8810 {
+ package_name: "mod_workshop_package.00000000D1364714"
+ mod_name: Maxwell
+ checksum: 8246417657465155767
+ mod_id: 3509995284
+ workshop_mod: true
+ optional_mod: false
+ full_name: true
+}
+
+server_mod_detail : _nameless.1d5.c9f2.9350 {
+ package_name: "mod_workshop_package.000000008BB1F7F2"
+ mod_name: "Air Brake Sound Mod"
+ checksum: 4059271849209013052
+ mod_id: 2343696370
+ workshop_mod: true
+ optional_mod: false
+ full_name: true
 }
 
 }

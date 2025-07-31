@@ -107,7 +107,6 @@ DISCORD_WEBHOOK_URL=your-discord-webhook
 For development, create `docker-compose.override.yml`:
 
 ```yaml
-version: '3.8'
 services:
   ats-web:
     ports:

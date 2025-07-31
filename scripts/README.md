@@ -157,7 +157,7 @@ The GitHub Actions workflow (`.github/workflows/ats-deploy.yml`) automatically:
 
 ### Required GitHub Secrets
 ```
-LINODE_TOKEN              # Linode API token
+LINODE_CLI_TOKEN              # Linode API token
 ATS_ROOT_PASSWORD         # Server root password
 DOCKERHUB_USERNAME        # DockerHub username
 DOCKERHUB_TOKEN           # DockerHub access token

@@ -1,7 +1,5 @@
-# Example for ATS Repository
-# File: .github/workflows/deploy.yml in your ATS repo
-
-name: 🚀 Manage ATS Game Server
+# ATS Game Server Deployment using Shared Deploy Workflow
+name: 🚀 Deploy ATS Game Server
 
 on:
   push:
@@ -19,18 +17,39 @@ on:
           - 'restart'
         default: 'deploy'
       
-      deployment_mode:
-        description: 'Deployment mode'
+      target_region:
+        description: 'Linode region'
         required: false
         type: choice
         options:
-          - 'full-deploy'
-          - 'update-only'
-          - 'restart-only'
-          - 'code-only'
-        default: 'update-only'
+          - 'ca-central'
+          - 'us-east'
+          - 'us-west'
+          - 'eu-west'
+        default: 'ca-central'
       
-      # 🎯 Advanced Options
+      server_type:
+        description: 'Linode server type'
+        required: false
+        type: choice
+        options:
+          - 'g6-standard-1'        # 2GB RAM - $12/month
+          - 'g6-standard-2'        # 4GB RAM - $20/month
+          - 'g6-standard-4'        # 8GB RAM - $40/month (recommended for game server)
+        default: 'g6-standard-4'
+      
+      cleanup_old_resources:
+        description: 'Clean up old servers before deployment'
+        required: false
+        type: boolean
+        default: false
+      
+      enable_monitoring:
+        description: 'Enable Netdata monitoring'
+        required: false
+        type: boolean
+        default: true
+      
       skip_tests:
         description: 'Skip running code tests'
         required: false
@@ -43,174 +62,119 @@ on:
         type: boolean
         default: false
       
-      build_docker_on_changes:
-        description: 'Only build Docker if code/Dockerfile changed'
-        required: false
-        type: boolean
-        default: true
-      
-      overwrite_server:
-        description: 'Destroy and recreate Linode server'
-        required: false
-        type: boolean
-        default: true
-      
-      # Destroy Options (for destroy action)
-      destroy_scope:
-        description: 'What to destroy (for destroy action)'
-        required: false
-        type: choice
-        options:
-          - 'service-only'
-          - 'full-server'
-          - 'reset-service'
-        default: 'service-only'
-      
       confirm_destruction:
         description: 'Type "DESTROY" to confirm destruction'
         required: false
         type: string
 
 jobs:
-  manage-ats:
-    # 👇 This calls your unified actions repository
+  # ATS Game Server Deployment
+  deploy-ats:
+    name: 🎮 Deploy ATS Game Server
     uses: nuniesmith/actions/.github/workflows/deploy.yml@main
     with:
-      service_name: ats
-      action_type: ${{ github.event.inputs.action_type || 'deploy' }}
-      deployment_mode: ${{ github.event.inputs.deployment_mode || 'update-only' }}
-      skip_tests: ${{ github.event.inputs.skip_tests || false }}
-      skip_docker_build: ${{ github.event.inputs.skip_docker_build || false }}
-      build_docker_on_changes: ${{ github.event.inputs.build_docker_on_changes || true }}
-      overwrite_server: ${{ github.event.inputs.overwrite_server || true }}
-      destroy_scope: ${{ github.event.inputs.destroy_scope || 'service-only' }}
-      confirm_destruction: ${{ github.event.inputs.confirm_destruction || '' }}
-      server_type: g6-standard-4  # 8GB RAM for better performance
-      target_region: ca-central
-      domain_suffix: 7gram.xyz
-      enable_monitoring: true
+      service_name: 'ats'
+      action_type: ${{ inputs.action_type || 'deploy' }}
+      deployment_mode: 'full-deploy'
+      skip_tests: ${{ inputs.skip_tests || false }}
+      skip_docker_build: ${{ inputs.skip_docker_build || false }}
+      build_docker_on_changes: true
+      overwrite_server: ${{ inputs.cleanup_old_resources || false }}
+      server_type: ${{ inputs.server_type || 'g6-standard-4' }}
+      target_region: ${{ inputs.target_region || 'ca-central' }}
+      domain_suffix: '7gram.xyz'
+      enable_monitoring: ${{ inputs.enable_monitoring || true }}
       enable_backups: false
+      destroy_scope: 'full-server'
+      confirm_destruction: ${{ inputs.confirm_destruction || '' }}
     secrets:
-      LINODE_TOKEN: ${{ secrets.LINODE_TOKEN }}
+      LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
       SERVICE_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
       JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
       ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
       TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
       TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
-      NETDATA_CLAIM_TOKEN: ${{ secrets.NETDATA_CLAIM_TOKEN }}
-      NETDATA_CLAIM_ROOM: ${{ secrets.NETDATA_CLAIM_ROOM }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
       DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      NETDATA_CLAIM_TOKEN: ${{ secrets.NETDATA_CLAIM_TOKEN }}
+      NETDATA_CLAIM_ROOM: ${{ secrets.NETDATA_CLAIM_ROOM }}
 
-  # ATS-specific post-deployment
-  ats-post-deploy:
-    name: 🎮 ATS Game Server Setup
+  # Post-deployment game server configuration
+  ats-configuration:
+    name: 🎮 ATS Game Server Configuration
     runs-on: ubuntu-latest
-    needs: manage-ats
-    if: success() && (github.event.inputs.action_type == 'deploy' || github.event.inputs.action_type == '')
+    needs: deploy-ats
+    if: always() && needs.deploy-ats.result == 'success'
     
     steps:
       - name: 📥 Checkout ATS Repository
         uses: actions/checkout@v4
 
-      - name: 🌐 Update Cloudflare DNS Records
+      - name: 📊 Display Deployment Summary
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ZONE_ID != ''
+          SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
+          SERVER_ID: ${{ needs.deploy-ats.outputs.server_id }}
         run: |
-          echo "🌐 Updating Cloudflare DNS records for ATS server..."
-          
-          # Install jq for JSON processing
-          sudo apt-get update && sudo apt-get install -y jq >/dev/null 2>&1
-          
-          # Get the Tailscale IP from the infrastructure job output
-          TAILSCALE_IP="${{ needs.manage-ats.outputs.tailscale_ip }}"
-          
-          if [[ -z "$TAILSCALE_IP" || "$TAILSCALE_IP" == "unknown" || "$TAILSCALE_IP" == "pending" ]]; then
-            echo "⚠️ No valid Tailscale IP available: '$TAILSCALE_IP'"
-            echo "Skipping DNS update"
-            exit 0
-          fi
-          
-          echo "🔗 Using Tailscale IP: $TAILSCALE_IP"
-          
-          # Update A record for ats.7gram.xyz
-          echo "📝 Updating A record for ats.7gram.xyz..."
-          
-          # Get existing record ID first
-          RECORD_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?type=A&name=ats.7gram.xyz" \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json")
-          
-          if ! echo "$RECORD_RESPONSE" | jq . >/dev/null 2>&1; then
-            echo "❌ Failed to parse Cloudflare API response"
-            echo "Response: $RECORD_RESPONSE"
-            exit 1
-          fi
-          
-          RECORD_ID=$(echo "$RECORD_RESPONSE" | jq -r '.result[0].id // empty')
-          
-          if [[ -n "$RECORD_ID" && "$RECORD_ID" != "null" ]]; then
-            echo "📝 Updating existing A record (ID: $RECORD_ID)..."
-            UPDATE_RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
-              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data "{
-                \"type\": \"A\",
-                \"name\": \"ats\",
-                \"content\": \"$TAILSCALE_IP\",
-                \"ttl\": 300,
-                \"comment\": \"ATS Game Server - Updated by GitHub Actions\"
-              }")
-            
-            SUCCESS=$(echo "$UPDATE_RESPONSE" | jq -r '.success // false')
-            if [[ "$SUCCESS" == "true" ]]; then
-              echo "✅ A record updated successfully"
-            else
-              echo "❌ Failed to update A record"
-              echo "Response: $UPDATE_RESPONSE"
-            fi
-          else
-            echo "📝 Creating new A record..."
-            CREATE_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data "{
-                \"type\": \"A\",
-                \"name\": \"ats\",
-                \"content\": \"$TAILSCALE_IP\",
-                \"ttl\": 300,
-                \"comment\": \"ATS Game Server - Created by GitHub Actions\"
-              }")
-            
-            SUCCESS=$(echo "$CREATE_RESPONSE" | jq -r '.success // false')
-            if [[ "$SUCCESS" == "true" ]]; then
-              echo "✅ A record created successfully"
-            else
-              echo "❌ Failed to create A record"
-              echo "Response: $CREATE_RESPONSE"
-            fi
-          fi
-          
-          echo "✅ DNS update completed - ats.7gram.xyz now points to $TAILSCALE_IP"
-          echo "⏳ DNS propagation may take a few minutes..."
+          echo "🚀 ATS Game Server Deployment Complete!"
+          echo "========================================"
+          echo ""
+          echo "🎮 **ATS Game Server:**"
+          echo "  • Server ID: $SERVER_ID"
+          echo "  • Server IP: $SERVER_IP"
+          echo "  • Server Type: ${{ inputs.server_type || 'g6-standard-4' }} (8GB RAM)"
+          echo "  • Cost: $40/month"
+          echo "  • Region: ${{ inputs.target_region || 'ca-central' }}"
+          echo ""
+          echo "🔗 **Access URLs:**"
+          echo "  • Tailscale: http://ats or http://$SERVER_IP"
+          echo "  • Public HTTP: http://ats.7gram.xyz"
+          echo "  • Public HTTPS: https://ats.7gram.xyz"
+          echo "  • Game Server: ats.7gram.xyz:27015"
+          echo ""
+          echo "📡 **Monitoring:**"
+          echo "  • Netdata: http://$SERVER_IP:19999"
+          echo "  • Container Stats: Available via Netdata dashboard"
+          echo ""
+          echo "🎮 **Game Server Info:**"
+          echo "  • Port: 27015 (TCP/UDP)"
+          echo "  • Max Players: 8 (configurable)"
+          echo "  • Game Mode: American Truck Simulator Multiplayer"
+          echo ""
+          echo "🔧 **Next Steps:**"
+          echo "  1. Services are automatically starting up"
+          echo "  2. Game server will be available in a few minutes"
+          echo "  3. Connect using: ats.7gram.xyz:27015"
+          echo "  4. Monitor performance via Netdata dashboard"
+          echo ""
+          echo "✅ **ATS game server deployment using shared workflow complete!**"
 
-      - name: 🎮 Configure Game Server
+      - name: 🔗 Setup Tailscale for Post-Deploy Access
         env:
-          SSHPASS: ${{ secrets.ACTIONS_USER_PASSWORD }}
+          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+        if: env.TAILSCALE_OAUTH_CLIENT_ID != '' && env.TAILSCALE_OAUTH_SECRET != ''
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+        continue-on-error: true
+
+      - name: 🧪 Test ATS Game Server
+        env:
+          SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
         run: |
-          echo "🎮 Configuring ATS game server..."
+          echo "🧪 Testing ATS game server..."
           
           # Install sshpass for password authentication
           sudo apt-get update && sudo apt-get install -y sshpass >/dev/null 2>&1
           
           # Get the server IP information
-          TAILSCALE_IP="${{ needs.manage-ats.outputs.tailscale_ip }}"
+          # Get the Tailscale IP from the infrastructure job output
+          TAILSCALE_IP="${{ needs.deploy-ats.outputs.tailscale_ip }}"
           echo "🔗 Server Tailscale IP: $TAILSCALE_IP"
           
           # Try to determine server connection method
@@ -221,7 +185,7 @@ jobs:
           sleep 15
           
           # Get server public IP as fallback
-          SERVER_IP="${{ needs.manage-ats.outputs.server_ip }}"
+          SERVER_IP="${{ needs.deploy-ats.outputs.server_ip }}"
           echo "🔗 Server Public IP: $SERVER_IP"
           
           # Method 1: Try Tailscale IP directly (most reliable for GitHub Actions)
@@ -329,190 +293,25 @@ jobs:
             }
           fi
           
-          # Pull Docker images and start services
-          echo "🐳 Starting ATS services from repository..."
+          # Upload and run Docker Compose deployment script
+          echo "🐳 Starting ATS services with Docker Compose..."
           sshpass -e ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST "
             cd /home/ats_user/ats || exit 1
             
-            echo 'Current directory contents:'
-            ls -la
+            # Make deployment script executable
+            chmod +x deploy-compose.sh
             
-            # Advanced Docker networking fixes
-            echo '🔧 Applying comprehensive Docker network fixes...'
-            
-            # Stop any existing services and clean up networks
-            echo '🧹 Cleaning up existing services...'
-            
-            # Determine which Docker Compose command to use for cleanup
-            COMPOSE_CMD=\"\"
-            if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-              COMPOSE_CMD=\"docker compose\"
-            elif command -v docker-compose >/dev/null 2>&1; then
-              COMPOSE_CMD=\"docker-compose\"
-            fi
-            
-            if [[ -n \"\$COMPOSE_CMD\" ]]; then
-              \$COMPOSE_CMD down --remove-orphans 2>/dev/null || true
-            else
-              echo 'No compose command available for cleanup'
-            fi
-            
-            docker network prune -f 2>/dev/null || true
-            
-            # Check for iptables issues and fix them comprehensively
-            echo '🔍 Checking and fixing iptables configuration...'
-            if ! sudo iptables -t nat -L DOCKER >/dev/null 2>&1; then
-              echo '⚠️ Docker iptables chains missing, performing complete reset...'
-              
-              # Stop Docker completely
-              sudo systemctl stop docker
-              sudo systemctl stop docker.socket
-              
-              # Clean up all Docker-related iptables rules and chains
-              echo '🧹 Cleaning iptables...'
-              sudo iptables -t nat -F DOCKER 2>/dev/null || true
-              sudo iptables -t filter -F DOCKER 2>/dev/null || true
-              sudo iptables -t filter -F DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
-              sudo iptables -t filter -F DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
-              sudo iptables -t filter -F DOCKER-USER 2>/dev/null || true
-              
-              # Remove Docker chains
-              sudo iptables -t nat -X DOCKER 2>/dev/null || true
-              sudo iptables -t filter -X DOCKER 2>/dev/null || true
-              sudo iptables -t filter -X DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
-              sudo iptables -t filter -X DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
-              sudo iptables -t filter -X DOCKER-USER 2>/dev/null || true
-              
-              # Remove Docker network interfaces and data
-              echo '🧹 Cleaning network interfaces...'
-              for interface in \$(ip link show | grep br- | cut -d: -f2 | tr -d \" \"); do
-                echo \"  Removing bridge: \$interface\"
-                sudo ip link delete \"\$interface\" 2>/dev/null || true
-              done
-              
-              # Clean Docker network data
-              sudo rm -rf /var/lib/docker/network/* 2>/dev/null || true
-              sudo rm -rf /var/lib/docker/containers/*/network 2>/dev/null || true
-              
-              echo '✅ Network cleanup completed'
-            fi
-            
-            # Restart Docker with clean state
-            echo '🔄 Restarting Docker with clean network state...'
-            sudo systemctl start docker.socket
-            sudo systemctl start docker
-            sleep 15
-            
-            # Verify Docker is working properly
-            if docker info >/dev/null 2>&1; then
-              echo '✅ Docker restarted successfully'
-              
-              # Test network creation capability
-              if docker network create test-network >/dev/null 2>&1; then
-                echo '✅ Network creation test passed'
-                docker network rm test-network >/dev/null 2>&1
-              else
-                echo '⚠️ Network creation test failed, but continuing...'
-              fi
-            else
-              echo '❌ Docker restart failed'
-              sudo systemctl status docker
-              exit 1
-            fi
-            
-            # Pull the latest images
-            echo 'Pulling Docker images...'
-            
-            # Use the same compose command for pulling
-            if [[ -n \"\$COMPOSE_CMD\" ]]; then
-              \$COMPOSE_CMD pull || echo 'Failed to pull some images (may not exist yet)'
-            else
-              echo 'No compose command available for pulling images'
-            fi
-            
-            # Start the services with comprehensive error handling
-            echo 'Starting ATS services...'
-            if [[ -n \"\$COMPOSE_CMD\" ]] && \$COMPOSE_CMD up -d; then
-              echo '✅ Docker Compose services started successfully'
-            else
-              echo '⚠️ Docker Compose failed, trying recovery methods...'
-              
-              # Method 1: Network reset and retry
-              echo '🔧 Attempting network reset and retry...'
-              docker network ls -q | xargs -r docker network rm 2>/dev/null || true
-              sudo systemctl restart docker
-              sleep 10
-              
-              if [[ -n \"\$COMPOSE_CMD\" ]] && \$COMPOSE_CMD up -d --force-recreate; then
-                echo '✅ Services started after network reset'
-              else
-                echo '⚠️ Compose still failing, trying alternative startup methods...'
-                
-                # Method 2: Script-based startup
-                if [[ -f start.sh ]]; then
-                  echo '🚀 Using start.sh script...'
-                  chmod +x start.sh && ./start.sh
-                elif [[ -f deploy.sh ]]; then
-                  echo '🚀 Using deploy.sh script...'
-                  chmod +x deploy.sh && ./deploy.sh
-                elif [[ -f run.sh ]]; then
-                  echo '🚀 Using run.sh script...'
-                  chmod +x run.sh && ./run.sh
-                else
-                  # Method 3: Manual container startup
-                  echo '🔧 Attempting manual container startup...'
-                  
-                  IMAGES=\$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'ats|web|api' | head -5)
-                  if [[ -n \"\$IMAGES\" ]]; then
-                    echo '📋 Found ATS images for manual startup:'
-                    echo \"\$IMAGES\"
-                    
-                    # Clean up any existing containers
-                    docker stop ats-web ats-api ats-server ats-redis 2>/dev/null || true
-                    docker rm ats-web ats-api ats-server ats-redis 2>/dev/null || true
-                    
-                    # Start Redis first (if available)
-                    if echo \"\$IMAGES\" | grep -q redis; then
-                      echo '🔴 Starting Redis...'
-                      docker run -d --name ats-redis --restart unless-stopped -p 6379:6379 redis:7-alpine && \\
-                        echo '✅ Redis started' || echo '⚠️ Redis startup failed'
-                      sleep 3
-                    fi
-                    
-                    # Start web interface
-                    WEB_IMAGE=\$(echo \"\$IMAGES\" | grep -E 'web|nginx' | head -1)
-                    if [[ -n \"\$WEB_IMAGE\" ]]; then
-                      echo \"🌐 Starting web interface: \$WEB_IMAGE\"
-                      docker run -d --name ats-web --restart unless-stopped -p 80:80 -p 8080:80 \"\$WEB_IMAGE\" && \\
-                        echo '✅ Web interface started' || echo '⚠️ Web startup failed'
-                    fi
-                    
-                    # Start API service
-                    API_IMAGE=\$(echo \"\$IMAGES\" | grep -E 'api|server' | head -1)
-                    if [[ -n \"\$API_IMAGE\" ]]; then
-                      echo \"🔧 Starting API service: \$API_IMAGE\"
-                      docker run -d --name ats-api --restart unless-stopped -p 3001:3001 -p 27015:27015 \"\$API_IMAGE\" && \\
-                        echo '✅ API service started' || echo '⚠️ API startup failed'
-                    fi
-                    
-                    # Start dedicated game server (if different from API)
-                    SERVER_IMAGE=\$(echo \"\$IMAGES\" | grep -E 'server|game' | grep -v api | head -1)
-                    if [[ -n \"\$SERVER_IMAGE\" && \"\$SERVER_IMAGE\" != \"\$API_IMAGE\" ]]; then
-                      echo \"🎮 Starting game server: \$SERVER_IMAGE\"
-                      docker run -d --name ats-server --restart unless-stopped -p 27015:27015/tcp -p 27015:27015/udp \"\$SERVER_IMAGE\" && \\
-                        echo '✅ Game server started' || echo '⚠️ Game server startup failed'
-                    fi
-                    
-                    sleep 10  # Wait for containers to stabilize
-                    
-                  else
-                    echo '❌ No ATS Docker images found for manual startup'
-                    echo '📋 Available images:'
-                    docker images | head -10
-                  fi
-                fi
-              fi
-            fi
+            # Run deployment with secrets passed as arguments
+            ./deploy-compose.sh \\
+              '${{ secrets.ATS_ROOT_PASSWORD }}' \\
+              '${{ secrets.CLOUDFLARE_API_TOKEN }}' \\
+              '${{ secrets.CLOUDFLARE_ZONE_ID }}' \\
+              '${{ secrets.DISCORD_WEBHOOK_URL }}' \\
+              '${{ secrets.NETDATA_CLAIM_TOKEN }}' \\
+              '${{ secrets.NETDATA_CLAIM_ROOM }}'
+          " || {
+            echo "⚠️ Failed to start ATS services"
+          }
             
             # Show final status
             echo ''
@@ -738,7 +537,7 @@ jobs:
           echo "⏳ Waiting for services to start and DNS to propagate..."
           sleep 30
           
-          TAILSCALE_IP="${{ needs.manage-ats.outputs.tailscale_ip }}"
+          TAILSCALE_IP="${{ needs.deploy-ats.outputs.tailscale_ip }}"
           
           # Test web interface via multiple methods
           echo "🌐 Testing web interface..."
@@ -828,15 +627,88 @@ jobs:
           " 2>/dev/null || echo "⚠️ Could not verify repository and container status"
           
           echo ""
-          echo "🌐 Access Information:"
-          echo "====================="
-          echo "🔗 Direct access: http://$TAILSCALE_IP"
-          echo "🔗 Direct access (alt port): http://$TAILSCALE_IP:8080"
-          echo "🔗 Public access: http://ats.7gram.xyz"
-          echo "🔗 Public access (alt port): http://ats.7gram.xyz:8080"
           echo ""
-          echo "📝 Note: Services may take a few minutes to fully initialize"
-          echo "🎮 ATS game server should be accessible for multiplayer connections"
+          echo "� **Testing Summary:**"
+          echo "  • Basic connectivity tests completed"
+          echo "  • Game server port availability checked"
+          echo "  • Web interface accessibility verified"
+          echo ""
+          echo "🎮 **Connection Info:**"
+          echo "  • Game Server: ats.7gram.xyz:27015"
+          echo "  • Web Interface: https://ats.7gram.xyz"
+          echo "  • Tailscale Access: http://ats or http://$SERVER_IP"
+          echo ""
+          echo "� **Additional Notes:**"
+          echo "  • Services may take a few minutes to fully initialize"
+          echo "  • Game server should be accessible for multiplayer connections"
+          echo "  • Check Netdata dashboard for detailed monitoring"
+
+      - name: 🐳 Configure Tailscale Docker Subnets
+        env:
+          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
+        if: env.TAILSCALE_OAUTH_CLIENT_ID != '' && env.TAILSCALE_OAUTH_SECRET != ''
+        run: |
+          echo "🐳 Configuring Tailscale to advertise Docker subnets on ATS server..."
+          
+          # Install sshpass for server connection
+          sudo apt-get update && sudo apt-get install -y sshpass >/dev/null 2>&1
+          
+          # Connect to server and configure Tailscale subnet routing
+          TAILSCALE_IP="${{ needs.deploy-ats.outputs.tailscale_ip }}"
+          
+          # Determine connection method
+          if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" && "$TAILSCALE_IP" != "pending" ]]; then
+            SERVER_HOST="$TAILSCALE_IP"
+            echo "🔗 Using Tailscale IP: $SERVER_HOST"
+          elif [[ -n "$SERVER_IP" && "$SERVER_IP" != "null" ]]; then
+            SERVER_HOST="$SERVER_IP"
+            echo "🔗 Using public IP: $SERVER_HOST"
+          else
+            echo "⚠️ No valid server IP available for configuration"
+            exit 0
+          fi
+          
+          echo "🐳 Configuring Docker subnet advertisement on ATS server..."
+          
+          # SSH to server and configure Tailscale subnet routing
+          sshpass -p "${{ secrets.ACTIONS_USER_PASSWORD }}" ssh -o StrictHostKeyChecking=no ats_user@$SERVER_HOST "
+            echo '🔍 Getting Docker network information...'
+            
+            # Get Docker bridge network CIDR
+            DOCKER_SUBNET=\$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo '172.17.0.0/16')
+            echo \"Default Docker subnet: \$DOCKER_SUBNET\"
+            
+            # Get any custom networks that might exist
+            ATS_NETWORKS=\$(docker network ls --format '{{.Name}}' | grep -E 'ats|game' || echo '')
+            for network in \$ATS_NETWORKS; do
+              if [[ -n \"\$network\" ]]; then
+                NETWORK_SUBNET=\$(docker network inspect \$network --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo '')
+                if [[ -n \"\$NETWORK_SUBNET\" ]]; then
+                  echo \"Found ATS network \$network subnet: \$NETWORK_SUBNET\"
+                fi
+              fi
+            done
+            
+            # Configure Tailscale to advertise Docker subnets
+            echo '🌐 Configuring Tailscale subnet advertisement...'
+            
+            # For now, just advertise the main Docker bridge network
+            SUBNETS=\"\$DOCKER_SUBNET\"
+            echo \"Advertising subnets: \$SUBNETS\"
+            
+            # Configure Tailscale with subnet routing
+            sudo tailscale up --advertise-routes=\"\$SUBNETS\" --accept-routes || {
+              echo '⚠️ Failed to configure subnet routing, trying basic reconnection...'
+              sudo tailscale up --accept-routes
+            }
+            
+            # Verify configuration
+            echo '✅ Tailscale subnet configuration completed'
+            tailscale status || echo 'Tailscale status check failed'
+            
+          " || echo "⚠️ Failed to configure Tailscale subnets"
 
       - name: 📊 Verify Netdata Cloud Connection
         env:
@@ -844,7 +716,7 @@ jobs:
         run: |
           echo "📊 Verifying Netdata cloud connection..."
           
-          TAILSCALE_IP="${{ needs.manage-ats.outputs.tailscale_ip }}"
+          TAILSCALE_IP="${{ needs.deploy-ats.outputs.tailscale_ip }}"
           
           # Determine server connection method (same as before)
           if timeout 10 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ats_user@ats "echo 'Connected'" 2>/dev/null; then

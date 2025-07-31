@@ -19,7 +19,7 @@ jobs:
           
       - name: Test Secret Access
         env:
-          TEST_SECRET: ${{ secrets.LINODE_TOKEN }}
+          TEST_SECRET: ${{ secrets.LINODE_CLI_TOKEN }}
         run: |
           if [ -z "$TEST_SECRET" ]; then
             echo "Secret is empty"

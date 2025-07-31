@@ -1,0 +1,73 @@
+# ATS Dedicated Server Dockerfile
+FROM ubuntu:22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV STEAMCMD_DIR=/opt/steamcmd
+ENV ATS_DIR=/app/ats-server
+ENV USER=ats
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    lib32gcc-s1 \
+    lib32stdc++6 \
+    libatomic1 \
+    ca-certificates \
+    software-properties-common \
+    unzip \
+    net-tools \
+    supervisor \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create user for running the server
+RUN useradd -m -s /bin/bash $USER
+
+# Install SteamCMD
+RUN mkdir -p $STEAMCMD_DIR && \
+    cd /tmp && \
+    wget https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz && \
+    tar -xzf steamcmd_linux.tar.gz -C $STEAMCMD_DIR && \
+    rm steamcmd_linux.tar.gz && \
+    chown -R $USER:$USER $STEAMCMD_DIR
+
+# Create ATS server directory
+RUN mkdir -p $ATS_DIR && \
+    mkdir -p $ATS_DIR/logs && \
+    mkdir -p $ATS_DIR/config && \
+    mkdir -p $ATS_DIR/data && \
+    chown -R $USER:$USER $ATS_DIR
+
+# Copy startup scripts first (as root)
+COPY scripts/start_ats_server.sh /usr/local/bin/start_ats_server.sh
+COPY scripts/install_ats_server.sh /usr/local/bin/install_ats_server.sh
+
+# Make scripts executable
+RUN chmod +x /usr/local/bin/start_ats_server.sh && \
+    chmod +x /usr/local/bin/install_ats_server.sh
+
+# Copy server configuration files with proper ownership
+COPY --chown=ats:ats config/server_config.sii $ATS_DIR/config/
+COPY --chown=ats:ats config/server_packages.sii $ATS_DIR/config/
+COPY --chown=ats:ats config/server_packages.dat $ATS_DIR/config/
+
+# Switch to ats user
+USER $USER
+WORKDIR $ATS_DIR
+
+# Install ATS dedicated server via SteamCMD
+RUN /usr/local/bin/install_ats_server.sh
+
+# Create volumes for persistent data
+VOLUME ["$ATS_DIR/data", "$ATS_DIR/logs", "$ATS_DIR/config"]
+
+# Expose ATS server ports
+EXPOSE 27015/tcp 27015/udp 27016/tcp 27016/udp
+
+# Health check
+HEALTHCHECK --interval=60s --timeout=30s --start-period=120s --retries=3 \
+    CMD netstat -an | grep :27015 || exit 1
+
+# Start the server
+CMD ["/usr/local/bin/start_ats_server.sh"]
