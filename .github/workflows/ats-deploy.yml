@@ -78,8 +78,8 @@ jobs:
       - name: 🧹 Cleanup Tailscale and Linode Resources
         env:
           LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
-          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
         run: |
           echo "🧹 Cleaning up old ATS resources..."
           
@@ -87,54 +87,43 @@ jobs:
           sudo apt-get update && sudo apt-get install -y curl jq
           
           # Cleanup Tailscale devices first
-          if [[ -n "$TAILSCALE_OAUTH_CLIENT_ID" && -n "$TAILSCALE_OAUTH_SECRET" ]]; then
+          if [[ -n "$TAILSCALE_AUTH_KEY" ]]; then
             echo "🔗 Cleaning up old Tailscale devices..."
             
-            # Get OAuth token
-            TOKEN_RESPONSE=$(curl -s -X POST "https://api.tailscale.com/api/v2/oauth/token" \
-              -u "$TAILSCALE_OAUTH_CLIENT_ID:$TAILSCALE_OAUTH_SECRET" \
-              -d "grant_type=client_credentials")
+            # Get the tailnet name
+            TAILNET="${{ secrets.TAILSCALE_TAILNET }}"
+            if [[ -z "$TAILNET" ]]; then
+              echo "⚠️ TAILSCALE_TAILNET secret not set. Please set it to your tailnet name"
+              exit 0
+            fi
+            echo "🔍 Using tailnet: $TAILNET"
             
-            ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
+            # Get devices list and handle null response
+            DEVICES_RESPONSE=$(curl -s -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" \
+              "https://api.tailscale.com/api/v2/tailnet/$TAILNET/devices")
             
-            if [[ -n "$ACCESS_TOKEN" ]]; then
-              echo "✅ Got Tailscale OAuth token"
+            # Check if we got a valid response with devices
+            if echo "$DEVICES_RESPONSE" | jq -e '.devices' >/dev/null 2>&1; then
+              DEVICES=$(echo "$DEVICES_RESPONSE" | jq -r '.devices[]? | select(.hostname | startswith("ats")) | .id // empty' | grep -v '^$')
               
-              # Get tailnet (assuming personal account format)
-              TAILNET="${TAILSCALE_OAUTH_CLIENT_ID%%.*}"
-              
-              # List and remove old ATS devices
-              echo "🔍 Looking for old ATS devices..."
-              
-              # Get devices list and handle null response
-              DEVICES_RESPONSE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
-                "https://api.tailscale.com/api/v2/tailnet/$TAILNET/devices")
-              
-              # Check if we got a valid response with devices
-              if echo "$DEVICES_RESPONSE" | jq -e '.devices' >/dev/null 2>&1; then
-                DEVICES=$(echo "$DEVICES_RESPONSE" | jq -r '.devices[]? | select(.hostname | startswith("ats")) | .id // empty' | grep -v '^$')
-                
-                if [[ -n "$DEVICES" ]]; then
-                  echo "Found ATS devices to remove..."
-                  for device_id in $DEVICES; do
-                    if [[ -n "$device_id" ]]; then
-                      echo "🗑️ Removing old Tailscale device: $device_id"
-                      curl -s -X DELETE \
-                        -H "Authorization: Bearer $ACCESS_TOKEN" \
-                        "https://api.tailscale.com/api/v2/device/$device_id" || echo "Failed to remove device $device_id"
-                    fi
-                  done
-                else
-                  echo "No ATS devices found to remove"
-                fi
+              if [[ -n "$DEVICES" ]]; then
+                echo "Found ATS devices to remove..."
+                for device_id in $DEVICES; do
+                  if [[ -n "$device_id" ]]; then
+                    echo "🗑️ Removing old Tailscale device: $device_id"
+                    curl -s -X DELETE \
+                      -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" \
+                      "https://api.tailscale.com/api/v2/device/$device_id" || echo "Failed to remove device $device_id"
+                  fi
+                done
               else
-                echo "⚠️ No devices array in Tailscale response or API error"
+                echo "No ATS devices found to remove"
               fi
             else
-              echo "⚠️ Failed to get Tailscale OAuth token"
+              echo "⚠️ No devices array in Tailscale response or API error"
             fi
           else
-            echo "⚠️ Tailscale OAuth credentials not available"
+            echo "⚠️ Tailscale API token not available"
           fi
           
           # Cleanup Linode servers
@@ -194,8 +183,8 @@ jobs:
       JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
       ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
       TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-      TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-      TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
@@ -255,13 +244,11 @@ jobs:
 
       - name: 🔗 Setup Tailscale for Post-Deploy Access
         env:
-          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
-        if: env.TAILSCALE_OAUTH_CLIENT_ID != '' && env.TAILSCALE_OAUTH_SECRET != ''
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        if: env.TAILSCALE_AUTHKEY != ''
         uses: tailscale/github-action@v2
         with:
-          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
         continue-on-error: true
 
       - name: 🧪 Test ATS Game Server
@@ -747,11 +734,10 @@ jobs:
 
       - name: 🐳 Configure Tailscale Docker Subnets
         env:
-          TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          TAILSCALE_OAUTH_SECRET: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
           SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
           SSHPASS: ${{ secrets.ACTIONS_USER_PASSWORD }}
-        if: env.TAILSCALE_OAUTH_CLIENT_ID != '' && env.TAILSCALE_OAUTH_SECRET != ''
+        if: env.TAILSCALE_AUTHKEY != ''
         run: |
           echo "🐳 Configuring Tailscale to advertise Docker subnets on ATS server..."
           
