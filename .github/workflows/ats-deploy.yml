@@ -1,4 +1,26 @@
+---
 # ATS Game Server Deployment using Shared Deploy Workflow
+#
+# Required GitHub Secrets:
+# - ATS_ROOT_PASSWORD: Root password for ATS server
+# - LINODE_CLI_TOKEN: Linode API token for server management
+# - ACTIONS_USER_PASSWORD: Password for actions user account (optional)
+# - JORDAN_PASSWORD: Password for jordan user account (optional)
+# - TS_OAUTH_CLIENT_ID: Tailscale OAuth client ID
+# - TS_OAUTH_SECRET: Tailscale OAuth client secret
+# - TAILSCALE_TAILNET: Tailscale tailnet name (optional)
+# - CLOUDFLARE_API_TOKEN: Cloudflare API token for DNS management
+# - CLOUDFLARE_ZONE_ID: Cloudflare zone ID
+# - ADMIN_EMAIL: Admin email for monitoring/alerts (optional)
+#
+# This workflow deploys an ATS game server with:
+# - Linode server provisioning (Arch Linux)
+# - Stage 0: Preflight validation on GitHub runner
+# - Stage 1: Arch Linux setup and Docker installation
+# - Stage 2: Tailscale OAuth authentication via systemd service
+# - Cloudflare DNS updates with Tailscale IP
+# - Docker containerization
+#
 name: 🚀 Deploy ATS Game Server
 
 on:
@@ -39,20 +61,8 @@ on:
           - 'g6-standard-4'        # 8GB RAM - $40/month
         default: 'g6-nanode-1'
       
-      cleanup_old_resources:
-        description: 'Clean up old servers before deployment'
-        required: false
-        type: boolean
-        default: true  # Enable cleanup by default during development
-      
-      enable_monitoring:
-        description: 'Enable Netdata monitoring'
-        required: false
-        type: boolean
-        default: true
-      
-      skip_tests:
-        description: 'Skip running code tests'
+      overwrite_server:
+        description: 'Destroy and recreate server (use with caution)'
         required: false
         type: boolean
         default: false
@@ -69,893 +79,107 @@ on:
         type: string
 
 jobs:
-  # Pre-deployment cleanup for development
-  cleanup-old-resources:
-    name: 🧹 Cleanup Old Resources
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' || inputs.cleanup_old_resources == true
-    steps:
-      - name: 🧹 Cleanup Tailscale and Linode Resources
-        env:
-          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
-        run: |
-          echo "🧹 Cleaning up old ATS resources..."
-          
-          # Install dependencies
-          sudo apt-get update && sudo apt-get install -y curl jq
-          
-          # Cleanup Tailscale devices first
-          if [[ -n "$TAILSCALE_AUTH_KEY" ]]; then
-            echo "🔗 Cleaning up old Tailscale devices..."
-            
-            # Get the tailnet name
-            TAILNET="${{ secrets.TAILSCALE_TAILNET }}"
-            if [[ -z "$TAILNET" ]]; then
-              echo "⚠️ TAILSCALE_TAILNET secret not set, using default API endpoint"
-              DEVICES_URL="https://api.tailscale.com/api/v2/devices"
-            else
-              echo "🔍 Using tailnet: $TAILNET"
-              DEVICES_URL="https://api.tailscale.com/api/v2/tailnet/$TAILNET/devices"
-            fi
-            
-            echo "🌐 Fetching devices from: $DEVICES_URL"
-            DEVICES_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" "$DEVICES_URL" 2>/dev/null || echo "CURL_FAILED")
-            
-            # Extract HTTP status code
-            HTTP_CODE=$(echo "$DEVICES_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-            DEVICES_JSON=$(echo "$DEVICES_RESPONSE" | sed '/HTTP_CODE:/d')
-            
-            echo "🔍 API Response Code: $HTTP_CODE"
-            
-            # Check if we got a valid response with devices
-            if [[ "$HTTP_CODE" == "200" ]] && echo "$DEVICES_JSON" | jq -e '.devices' >/dev/null 2>&1; then
-              # Multiple patterns to catch all ATS variants
-              CLEANUP_PATTERNS=(
-                "^ats(-[0-9]+)?$"
-                "^ats$" 
-                "^ats-"
-                "ats"
-              )
-              
-              TOTAL_REMOVED=0
-              ALL_FOUND_DEVICES=""
-              
-              # Collect all matching device IDs
-              for pattern in "${CLEANUP_PATTERNS[@]}"; do
-                echo "🔍 Searching for ATS devices with pattern: $pattern"
-                
-                DEVICES=$(echo "$DEVICES_JSON" | jq -r --arg pattern "$pattern" '
-                  .devices[]? | 
-                  select(
-                    (.hostname // .name | test($pattern; "i")) or 
-                    (.name // .hostname | test($pattern; "i"))
-                  ) | 
-                  .id // empty' | grep -v '^$')
-                
-                if [[ -n "$DEVICES" ]]; then
-                  ALL_FOUND_DEVICES="$ALL_FOUND_DEVICES $DEVICES"
-                fi
-              done
-              
-              # Remove duplicates
-              UNIQUE_DEVICES=$(echo "$ALL_FOUND_DEVICES" | tr ' ' '\n' | sort -u | grep -v '^$' || true)
-              
-              if [[ -n "$UNIQUE_DEVICES" ]]; then
-                echo "Found ATS devices to remove..."
-                for device_id in $UNIQUE_DEVICES; do
-                  if [[ -n "$device_id" ]]; then
-                    # Get device info
-                    DEVICE_INFO=$(echo "$DEVICES_JSON" | jq -r --arg id "$device_id" '.devices[]? | select(.id == $id) | "\(.hostname // .name // "unknown") (\(.addresses[0] // "no-ip"))"')
-                    echo "🗑️ Removing Tailscale device: $device_id - $DEVICE_INFO"
-                    
-                    DELETE_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X DELETE \
-                      -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" \
-                      "https://api.tailscale.com/api/v2/device/$device_id" 2>/dev/null || echo "CURL_FAILED")
-                    
-                    DELETE_CODE=$(echo "$DELETE_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-                    
-                    if [[ "$DELETE_CODE" == "200" || "$DELETE_CODE" == "204" ]]; then
-                      echo "   ✅ Successfully removed"
-                      ((TOTAL_REMOVED++))
-                    else
-                      echo "   ⚠️ Trying alternative endpoint (HTTP: $DELETE_CODE)..."
-                      # Try alternative endpoint
-                      ALT_DELETE_RESPONSE=$(curl -s -w "\nHTTP_CODE:%{http_code}" -X DELETE \
-                        -H "Authorization: Bearer $TAILSCALE_AUTH_KEY" \
-                        "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices/$device_id" 2>/dev/null || echo "CURL_FAILED")
-                      
-                      ALT_DELETE_CODE=$(echo "$ALT_DELETE_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-                      if [[ "$ALT_DELETE_CODE" == "200" || "$ALT_DELETE_CODE" == "204" ]]; then
-                        echo "   ✅ Successfully removed via alternative endpoint"
-                        ((TOTAL_REMOVED++))
-                      else
-                        echo "   ❌ Failed to remove device $device_id (Primary: $DELETE_CODE, Alt: $ALT_DELETE_CODE)"
-                      fi
-                    fi
-                    
-                    # Rate limiting
-                    sleep 1
-                  fi
-                done
-                echo "✅ Removed $REMOVED_COUNT ATS devices"
-              else
-                echo "ℹ️ No ATS devices found to remove"
-              fi
-            elif [[ "$HTTP_CODE" == "401" ]]; then
-              echo "❌ Tailscale API authentication failed - check TAILSCALE_AUTH_KEY"
-            elif [[ "$HTTP_CODE" == "403" ]]; then
-              echo "❌ Tailscale API access forbidden - check API key permissions"
-            elif [[ "$HTTP_CODE" == "404" ]]; then
-              echo "❌ Tailscale tailnet not found - check TAILSCALE_TAILNET value"
-            else
-              echo "⚠️ Tailscale API error - HTTP: $HTTP_CODE"
-              echo "Response: $DEVICES_JSON" | head -100
-            fi
-          else
-            echo "⚠️ Tailscale API token not available"
-          fi
-          
-          # Cleanup Linode servers
-          if [[ -n "$LINODE_CLI_TOKEN" ]]; then
-            echo "🖥️ Cleaning up old Linode servers..."
-            
-            # Install linode-cli
-            pip install linode-cli
-            
-            # Configure linode-cli
-            echo "[DEFAULT]
-          token = $LINODE_CLI_TOKEN" > ~/.linode-cli
-            
-            # Remove old ATS servers
-            echo "🔍 Looking for old ATS servers..."
-            
-            OLD_SERVERS=$(linode-cli linodes list --json | jq -r '.[] | select(.label | startswith("ats")) | .id')
-            
-            for server_id in $OLD_SERVERS; do
-              if [[ -n "$server_id" ]]; then
-                echo "🗑️ Removing old Linode server: $server_id (ats)"
-                linode-cli linodes delete "$server_id" --json || echo "Failed to remove server $server_id"
-                # Wait a bit between deletions
-                sleep 5
-              fi
-            done
-          else
-            echo "⚠️ Linode CLI token not available"
-          fi
-          
-          echo "✅ Cleanup completed"
-
-  # ATS Game Server Deployment
+  # ATS Game Server Deployment using Shared Workflow
   deploy-ats:
     name: 🎮 Deploy ATS Game Server
-    needs: cleanup-old-resources
-    if: always() && (needs.cleanup-old-resources.result == 'success' || needs.cleanup-old-resources.result == 'skipped')
     uses: nuniesmith/actions/.github/workflows/deploy.yml@main
     with:
       service_name: 'ats'
       action_type: ${{ inputs.action_type || 'deploy' }}
-      deployment_mode: 'full-deploy'
-      skip_tests: ${{ inputs.skip_tests || false }}
-      skip_docker_build: ${{ inputs.skip_docker_build || false }}
-      build_docker_on_changes: true
-      overwrite_server: true  # Always cleanup during development
-      server_type: ${{ inputs.server_type || 'g6-nanode-1' }}  # $5/month basic server - perfect for 2-user game server
+      server_type: ${{ inputs.server_type || 'g6-nanode-1' }}  # $5/month basic server - perfect for lightweight game server
       target_region: ${{ inputs.target_region || 'ca-central' }}
       domain_suffix: '7gram.xyz'
-      enable_monitoring: ${{ inputs.enable_monitoring || true }}
-      enable_backups: false
-      destroy_scope: 'full-server'
-      confirm_destruction: ${{ inputs.confirm_destruction || '' }}
+      overwrite_server: ${{ inputs.overwrite_server || false }}
     secrets:
       LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
       SERVICE_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-      JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
       ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
-      TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
+      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
       TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
-      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
-      NETDATA_CLAIM_TOKEN: ${{ secrets.NETDATA_CLAIM_TOKEN }}
-      NETDATA_CLAIM_ROOM: ${{ secrets.NETDATA_CLAIM_ROOM }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
 
-  # Post-deployment game server configuration
-  ats-configuration:
-    name: 🎮 ATS Game Server Configuration
+  # Post-deployment summary
+  deployment-summary:
+    name: 📊 ATS Deployment Summary
     runs-on: ubuntu-latest
-    needs: deploy-ats
-    if: always() && needs.deploy-ats.result == 'success'
+    needs: [deploy-ats]
+    if: always()
     
     steps:
-      - name: 📥 Checkout ATS Repository
-        uses: actions/checkout@v4
-
-      - name: 📊 Display Deployment Summary
+      - name: 📊 Display ATS Deployment Summary
         env:
-          SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
-          SERVER_ID: ${{ needs.deploy-ats.outputs.server_id }}
+          ATS_SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
+          ATS_SERVER_ID: ${{ needs.deploy-ats.outputs.server_id }}
+          TAILSCALE_IP: ${{ needs.deploy-ats.outputs.tailscale_ip }}
+          DEPLOYMENT_STATUS: ${{ needs.deploy-ats.outputs.deployment_status }}
+          DEPLOY_RESULT: ${{ needs.deploy-ats.result }}
         run: |
-          echo "🚀 ATS Game Server Deployment Complete!"
-          echo "========================================"
+          echo "🚀 ATS Game Server Deployment Summary"
+          echo "====================================="
           echo ""
-          echo "🎮 **ATS Game Server:**"
-          echo "  • Server ID: $SERVER_ID"
-          echo "  • Server IP: $SERVER_IP"
-          echo "  • Server Type: ${{ inputs.server_type || 'g6-nanode-1' }} (1GB RAM)"
-          echo "  • Cost: \$5/month (reduced from \$40/month for lightweight 2-user game server)"
-          echo "  • Region: ${{ inputs.target_region || 'ca-central' }}"
+          echo "📊 **Deployment Result:** $DEPLOY_RESULT"
+          echo "🎯 **Action:** ${{ inputs.action_type || 'deploy' }}"
           echo ""
-          echo "🔗 **Access URLs:**"
-          echo "  • Tailscale: http://ats or http://$SERVER_IP"
-          echo "  • Public HTTP: http://ats.7gram.xyz"
-          echo "  • Public HTTPS: https://ats.7gram.xyz"
-          echo "  • Game Server: ats.7gram.xyz:27015"
-          echo ""
-          echo "📡 **Monitoring:**"
-          echo "  • Netdata: http://$SERVER_IP:19999"
-          echo "  • Container Stats: Available via Netdata dashboard"
-          echo ""
-          echo "🎮 **Game Server Info:**"
-          echo "  • Port: 27015 (TCP/UDP)"
-          echo "  • Max Players: 8 (configurable)"
-          echo "  • Game Mode: American Truck Simulator Multiplayer"
-          echo ""
-          echo "🔧 **Next Steps:**"
-          echo "  1. Services are automatically starting up"
-          echo "  2. Game server will be available in a few minutes"
-          echo "  3. Connect using: ats.7gram.xyz:27015"
-          echo "  4. Monitor performance via Netdata dashboard"
-          echo ""
-          echo "✅ **ATS game server deployment using shared workflow complete!**"
-
-      - name: 🔗 Setup Tailscale for Post-Deploy Access
-        env:
-          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        if: env.TAILSCALE_AUTHKEY != ''
-        uses: tailscale/github-action@v2
-        with:
-          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        continue-on-error: true
-
-      - name: 🧪 Test ATS Game Server
-        env:
-          SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
-          SSHPASS: ${{ secrets.ACTIONS_USER_PASSWORD }}
-        run: |
-          echo "🧪 Testing ATS game server..."
           
-          # Install sshpass for password authentication
-          sudo apt-get update && sudo apt-get install -y sshpass >/dev/null 2>&1
-          
-          # Get the server IP information
-          # Get the Tailscale IP from the infrastructure job output
-          TAILSCALE_IP="${{ needs.deploy-ats.outputs.tailscale_ip }}"
-          echo "🔗 Server Tailscale IP: $TAILSCALE_IP"
-          
-          # Try to determine server connection method
-          echo "🔍 Determining server connection method..."
-          
-          # Give SSH service time to be ready after Stage 2
-          echo "⏳ Waiting for SSH service to be ready..."
-          sleep 15
-          
-          # Get server public IP as fallback
-          SERVER_IP="${{ needs.deploy-ats.outputs.server_ip }}"
-          echo "🔗 Server Public IP: $SERVER_IP"
-          
-          # Method 1: Try Tailscale IP directly (most reliable for GitHub Actions)
-          if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" && "$TAILSCALE_IP" != "pending" ]] && timeout 15 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ats_user@$TAILSCALE_IP "echo 'Connected via Tailscale IP'" 2>/dev/null; then
-            SERVER_HOST="$TAILSCALE_IP"
-            echo "✅ Using Tailscale IP: $SERVER_HOST"
-          # Method 2: Try public IP directly
-          elif [[ -n "$SERVER_IP" && "$SERVER_IP" != "unknown" ]] && timeout 15 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ats_user@$SERVER_IP "echo 'Connected via public IP'" 2>/dev/null; then
-            SERVER_HOST="$SERVER_IP"
-            echo "✅ Using public IP: $SERVER_HOST"
-          # Method 3: Try public domain (after DNS update)
-          elif timeout 15 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 ats_user@ats.7gram.xyz "echo 'Connected via public domain'" 2>/dev/null; then
-            SERVER_HOST="ats.7gram.xyz"
-            echo "✅ Using public domain: $SERVER_HOST"
-          # Method 4: Try root user as fallback
-          elif [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" && "$TAILSCALE_IP" != "pending" ]] && timeout 15 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$TAILSCALE_IP "echo 'Connected as root via Tailscale IP'" 2>/dev/null; then
-            SERVER_HOST="$TAILSCALE_IP"
-            SERVER_USER="root"
-            echo "✅ Using root@Tailscale IP: $SERVER_HOST (will setup ats_user)"
+          if [[ "$DEPLOY_RESULT" == "success" ]]; then
+            echo "🎮 **ATS Game Server:**"
+            echo "  • Server ID: ${ATS_SERVER_ID:-'Check workflow logs'}"
+            echo "  • Public IP: ${ATS_SERVER_IP:-'Check workflow logs'}"
+            echo "  • Tailscale IP: ${TAILSCALE_IP:-'Check workflow logs'}"
+            echo "  • Server Type: ${{ inputs.server_type || 'g6-nanode-1' }} (1GB RAM)"
+            echo "  • Operating System: Arch Linux"
+            echo "  • Region: ${{ inputs.target_region || 'ca-central' }}"
+            echo ""
+            echo "🌐 **DNS Configuration:**"
+            echo "  ✅ DNS records updated automatically by shared workflow"
+            echo "  🔧 Cloudflare integration with Tailscale IP updates"
+            echo "  📋 Domain: ats.7gram.xyz → $TAILSCALE_IP"
+            echo ""
+            echo "🔗 **Access Methods:**"
+            if [[ -n "$ATS_SERVER_IP" ]]; then
+              echo "  • SSH (public): ssh root@$ATS_SERVER_IP"
+            fi
+            if [[ -n "$TAILSCALE_IP" ]]; then
+              echo "  • SSH (Tailscale): ssh root@$TAILSCALE_IP"
+              echo "  • Game Server (Tailscale): $TAILSCALE_IP:27015"
+            fi
+            echo "  • Game Server (public): ats.7gram.xyz:27015"
+            echo "  • Web Interface: https://ats.7gram.xyz"
+            echo ""
+            echo "🔧 **Stage Process Completed:**"
+            echo "  ✅ Stage 0: Preflight validation on GitHub runner"
+            echo "  ✅ Stage 1: Arch Linux setup and Docker installation"
+            echo "  ✅ Stage 2: Tailscale OAuth authentication via systemd"
+            echo "  ✅ DNS: Cloudflare records updated with Tailscale IP"
+            echo "  ✅ Service: ATS game server deployed and running"
+            echo ""
+            echo "🎮 **Game Server Info:**"
+            echo "  • Port: 27015 (TCP/UDP)"
+            echo "  • Max Players: 8 (configurable)"
+            echo "  • Game Mode: American Truck Simulator Multiplayer"
+            echo "  • Cost: \$5/month (reduced from \$40/month for lightweight server)"
+            echo ""
+            echo "🔧 **Next Steps:**"
+            echo "  1. Wait 2-5 minutes for DNS propagation"
+            echo "  2. Game server will be available shortly"
+            echo "  3. Connect using: ats.7gram.xyz:27015"
+            echo "  4. Monitor performance via server logs"
+            echo ""
+          elif [[ "$DEPLOY_RESULT" == "failure" ]]; then
+            echo "❌ **Deployment Failed**"
+            echo "  • Check individual job logs for details"
+            echo "  • Common issues: SSH connectivity, package installation"
+            echo "  • Retry deployment after resolving issues"
+            echo ""
           else
-            echo "❌ Could not connect to ATS server via any method"
-            echo "🔍 Tried:"
-            echo "  - Tailscale IP: $TAILSCALE_IP"
-            echo "  - Public IP: $SERVER_IP"  
-            echo "  - Public domain: ats.7gram.xyz"
-            echo "  - Root user fallback: root@$TAILSCALE_IP"
-            echo "⚠️ Skipping game server configuration"
-            exit 0
+            echo "⚠️ **Deployment Status:** $DEPLOY_RESULT"
+            echo "  • Check workflow logs for current status"
+            echo ""
           fi
           
-          # Set default user if not set
-          SERVER_USER="${SERVER_USER:-ats_user}"
-          echo "🔗 Connecting as: $SERVER_USER@$SERVER_HOST"
-          
-          # If we connected as root, set up ats_user properly
-          if [[ "$SERVER_USER" == "root" ]]; then
-            echo "🔧 Setting up ats_user access..."
-            sshpass -e ssh -o StrictHostKeyChecking=no root@$SERVER_HOST "
-              # Ensure ats_user exists and has proper setup
-              id ats_user || useradd -m -s /bin/bash ats_user
-              echo 'ats_user:${{ secrets.ACTIONS_USER_PASSWORD }}' | chpasswd
-              usermod -aG docker ats_user
-              mkdir -p /home/ats_user/.ssh
-              chmod 700 /home/ats_user/.ssh  
-              chown ats_user:ats_user /home/ats_user/.ssh
-            "
-            # Now switch to ats_user for the rest
-            SERVER_USER="ats_user"
-          fi
-          
-          echo "🔄 Waiting for services to be ready..."
-          sleep 30
-          
-          # Clone or update the ATS repository
-          echo "� Setting up ATS repository..."
-          sshpass -e ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST "
-            # Ensure git is available and configured
-            git --version || { echo 'Git not found'; exit 1; }
-            
-            # Remove existing directory if it exists and clone fresh
-            rm -rf /home/ats_user/ats
-            
-            # Clone the ATS repository (public repo, no auth needed)
-            echo 'Cloning ATS repository from GitHub...'
-            git clone https://github.com/nuniesmith/ats.git /home/ats_user/ats || {
-              echo 'Failed to clone repository, trying alternative methods...'
-              # Try with explicit HTTPS
-              git clone https://github.com/nuniesmith/ats.git /home/ats_user/ats --depth 1 || {
-                echo 'Git clone failed completely'
-                exit 1
-              }
-            }
-            
-            # Change ownership to ats_user if we're running as root
-            if [[ \$(whoami) == 'root' ]]; then
-              chown -R ats_user:ats_user /home/ats_user/ats
-            fi
-            
-            # Change to the repository directory
-            cd /home/ats_user/ats
-            
-            echo 'Repository cloned successfully!'
-            echo 'Repository contents:'
-            ls -la
-            
-            echo 'Git repository info:'
-            git log --oneline -5 || echo 'Git log unavailable'
-          " || {
-            echo "⚠️ Failed to clone ATS repository"
-            exit 1
-          }
-          
-          # Upload any local configs if they exist (to override defaults)
-          if [[ -f "config/server_config.sii" ]]; then
-            echo "📁 Uploading custom server configuration..."
-            sshpass -e scp -o StrictHostKeyChecking=no config/server_config.sii $SERVER_USER@$SERVER_HOST:/home/ats_user/ats/config/ || {
-              echo "⚠️ Failed to upload server config"
-            }
-          fi
-          
-          if [[ -d "config/" ]]; then
-            echo "📁 Uploading additional custom configurations..."
-            sshpass -e scp -r -o StrictHostKeyChecking=no config/* $SERVER_USER@$SERVER_HOST:/home/ats_user/ats/config/ || {
-              echo "⚠️ Failed to upload some configs"
-            }
-          fi
-          
-          # Upload and run Docker Compose deployment script
-          echo "🐳 Starting ATS services with Docker Compose..."
-          sshpass -e ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST "
-            cd /home/ats_user/ats || exit 1
-            
-            # Make deployment script executable
-            chmod +x deploy-compose.sh
-            
-            # Run deployment with secrets passed as arguments
-            ./deploy-compose.sh \\
-              '${{ secrets.ATS_ROOT_PASSWORD }}' \\
-              '${{ secrets.CLOUDFLARE_API_TOKEN }}' \\
-              '${{ secrets.CLOUDFLARE_ZONE_ID }}' \\
-              '${{ secrets.DISCORD_WEBHOOK_URL }}' \\
-              '${{ secrets.NETDATA_CLAIM_TOKEN }}' \\
-              '${{ secrets.NETDATA_CLAIM_ROOM }}'
-          " || {
-            echo "⚠️ Failed to start ATS services"
-          }
-            
-            # Show final status
-            echo ''
-            echo '🔍 Checking Docker services status...'
-            
-            # Wait for services to fully start
-            echo "⏱️ Waiting for services to initialize..."
-            sleep 15
-            
-            # ===================================
-            # COMPREHENSIVE SERVICE VERIFICATION
-            # ===================================
-            
-            echo ''
-            echo '📊 === SERVICE VERIFICATION REPORT ==='
-            
-            # Check running containers
-            echo '📋 Running containers:'
-            CONTAINERS=\$(docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}')
-            if [[ -n \"\$CONTAINERS\" ]]; then
-              echo \"\$CONTAINERS\"
-            else
-              echo '❌ No containers running'
-            fi
-            echo ''
-            
-            # Port connectivity tests
-            echo '🔌 Port connectivity tests:'
-            PORTS=(80 443 8080 3000 3001 27015)
-            for PORT in \"\${PORTS[@]}\"; do
-              if netstat -tlnp 2>/dev/null | grep -q \":$PORT \"; then
-                echo \"✅ Port \$PORT: LISTENING\"
-              else
-                echo \"❌ Port \$PORT: NOT LISTENING\"
-              fi
-            done
-            echo ''
-            
-            # Service health checks
-            echo '🏥 Service health checks:'
-            
-            # Web interface tests
-            if curl -s --max-time 10 \"http://localhost\" >/dev/null 2>&1; then
-              echo '✅ Web interface (port 80): HEALTHY'
-              WEB_TITLE=\$(curl -s --max-time 5 \"http://localhost\" | grep -oP '<title>\\K[^<]+' | head -1)
-              [[ -n \"\$WEB_TITLE\" ]] && echo \"   📄 Page title: \$WEB_TITLE\"
-            elif curl -s --max-time 10 \"http://localhost:8080\" >/dev/null 2>&1; then
-              echo '✅ Web interface (port 8080): HEALTHY'
-            else
-              echo '❌ Web interface: NOT RESPONDING'
-            fi
-            
-            # API health checks
-            if curl -s --max-time 10 \"http://localhost:3000/health\" >/dev/null 2>&1; then
-              echo '✅ API service (port 3000): HEALTHY'
-            elif curl -s --max-time 10 \"http://localhost:3001/health\" >/dev/null 2>&1; then
-              echo '✅ API service (port 3001): HEALTHY'
-            elif curl -s --max-time 10 \"http://localhost:3000\" >/dev/null 2>&1; then
-              echo '✅ API service (port 3000): RESPONDING'
-            elif curl -s --max-time 10 \"http://localhost:3001\" >/dev/null 2>&1; then
-              echo '✅ API service (port 3001): RESPONDING'
-            else
-              echo '❌ API service: NOT RESPONDING'
-            fi
-            
-            # Game server connectivity
-            if netstat -tlnp 2>/dev/null | grep -q ':27015 '; then
-              echo '✅ Game server (port 27015): LISTENING'
-              # Test UDP port if possible
-              if netstat -ulnp 2>/dev/null | grep -q ':27015 '; then
-                echo '✅ Game server UDP (port 27015): LISTENING'
-              fi
-            else
-              echo '❌ Game server (port 27015): NOT LISTENING'
-            fi
-            echo ''
-            
-            # Resource usage monitoring
-            echo '📈 Resource usage:'
-            echo \"💾 Memory: \$(free -h | grep '^Mem' | awk '{print \$3\"/\"\$2}')\"
-            echo \"💿 Disk: \$(df -h / | tail -1 | awk '{print \$3\"/\"\$2\" (\"\$5\" used)\"}')\"
-            echo \"🔄 Load: \$(uptime | awk -F'load average:' '{print \$2}' | xargs)\"
-            echo ''
-            
-            # Docker system info
-            echo '🐳 Docker system status:'
-            echo \"📦 Containers: \$(docker ps -q | wc -l) running, \$(docker ps -aq | wc -l) total\"
-            echo \"🖼️  Images: \$(docker images -q | wc -l) total\"
-            echo \"🌐 Networks: \$(docker network ls -q | wc -l) total\"
-            echo \"💾 Volumes: \$(docker volume ls -q | wc -l) total\"
-            echo ''
-            
-            # Docker Compose service verification
-            echo '🐙 Docker Compose services:'
-            
-            # Determine which Docker Compose command to use
-            COMPOSE_CMD=\"\"
-            if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-              COMPOSE_CMD=\"docker compose\"
-              echo \"Using Docker Compose V2: docker compose\"
-            elif command -v docker-compose >/dev/null 2>&1; then
-              COMPOSE_CMD=\"docker-compose\"
-              echo \"Using Docker Compose V1: docker-compose\"
-            else
-              echo \"❌ No Docker Compose command available\"
-            fi
-            
-            if [[ -n \"\$COMPOSE_CMD\" ]]; then
-              # Use more robust commands that handle errors better
-              SERVICES_UP=\$(\$COMPOSE_CMD ps -q 2>/dev/null | wc -l || echo \"0\")
-              TOTAL_SERVICES=\$(\$COMPOSE_CMD config --services 2>/dev/null | wc -l || echo \"0\")
-              
-              echo \"📊 Services status: \$SERVICES_UP/\$TOTAL_SERVICES running\"
-              
-              if [[ \"\$SERVICES_UP\" -gt 0 ]]; then
-                echo \"✅ Some Docker services are running\"
-                \$COMPOSE_CMD ps 2>/dev/null || echo 'Could not get compose status'
-                
-                # Check logs for any obvious errors
-                echo \"📝 Quick log check for errors:\"
-                \$COMPOSE_CMD logs --tail 20 2>/dev/null | grep -i \"error\\|fail\\|exception\" | head -5 || echo \"No obvious errors in recent logs\"
-                
-              else
-                echo \"❌ No Docker Compose services are running\"
-                \$COMPOSE_CMD ps 2>/dev/null || echo 'Docker compose not responding'
-                
-                # Check if any ATS containers are running manually
-                MANUAL_CONTAINERS=\$(docker ps --filter \"name=ats\" --format \"{{.Names}}\" 2>/dev/null | wc -l || echo \"0\")
-                if [[ \"\$MANUAL_CONTAINERS\" -gt 0 ]]; then
-                  echo \"📋 Found \$MANUAL_CONTAINERS manually started ATS containers:\"
-                  docker ps --filter \"name=ats\" --format \"table {{.Names}}\\t{{.Status}}\\t{{.Ports}}\" 2>/dev/null || true
-                fi
-              fi
-            else
-              echo 'Docker compose command not available, checking containers directly'
-              
-              # Check for any running containers
-              RUNNING_CONTAINERS=\$(docker ps --format \"{{.Names}}\" 2>/dev/null | wc -l || echo \"0\")
-              if [[ \"\$RUNNING_CONTAINERS\" -gt 0 ]]; then
-                echo \"📋 Found \$RUNNING_CONTAINERS running containers:\"
-                docker ps --format \"table {{.Names}}\\t{{.Status}}\\t{{.Ports}}\" 2>/dev/null || true
-              else
-                echo \"❌ No containers running\"
-              fi
-            fi
-            echo ''
-            
-            # Service accessibility summary
-            echo '🌍 Service accessibility:'
-            
-            # Test different access methods
-            echo '🔗 Access URLs to test:'
-            
-            # Get server IPs
-            TAILSCALE_IP=\$(hostname -I | awk '{print \$1}' | head -1)
-            PUBLIC_IP=\$(curl -s --max-time 10 ifconfig.me 2>/dev/null || curl -s --max-time 10 icanhazip.com 2>/dev/null || echo 'unavailable')
-            
-            if [[ -n \"\$TAILSCALE_IP\" && \"\$TAILSCALE_IP\" != \"127.0.0.1\" ]]; then
-              echo \"   📍 Tailscale IP: http://\$TAILSCALE_IP\"
-              echo \"   📍 Tailscale IP:8080: http://\$TAILSCALE_IP:8080\"
-            fi
-            
-            if [[ -n \"\$PUBLIC_IP\" && \"\$PUBLIC_IP\" != \"unavailable\" ]]; then
-              echo \"   🌐 Public IP: http://\$PUBLIC_IP\"
-              echo \"   🌐 Public IP:8080: http://\$PUBLIC_IP:8080\"
-            fi
-            
-            # Domain testing if configured
-            DOMAIN_NAME=\"ats.7gram.xyz\"  # Fixed domain name for ATS
-            if [[ -n \"\$DOMAIN_NAME\" ]]; then
-              echo \"   🏷️  Domain: http://\$DOMAIN_NAME\"
-              echo \"   🏷️  Domain HTTPS: https://\$DOMAIN_NAME\"
-              
-              # Test domain resolution
-              if nslookup \"\$DOMAIN_NAME\" >/dev/null 2>&1; then
-                echo '   ✅ Domain DNS resolution: OK'
-              else
-                echo '   ❌ Domain DNS resolution: FAILED'
-              fi
-            fi
-            echo ''
-            
-            # Final status summary
-            RUNNING_COUNT=\$(docker ps -q | wc -l)
-            if [[ \$RUNNING_COUNT -gt 0 ]]; then
-              echo \"🎉 === DEPLOYMENT SUCCESSFUL ===\\nℹ️  \$RUNNING_COUNT Docker containers are running\"
-              
-              # Show primary access method
-              if [[ -n \"\$TAILSCALE_IP\" && \"\$TAILSCALE_IP\" != \"127.0.0.1\" ]]; then
-                echo \"🔗 Primary access: http://\$TAILSCALE_IP\"
-              elif [[ -n \"\$PUBLIC_IP\" && \"\$PUBLIC_IP\" != \"unavailable\" ]]; then
-                echo \"🔗 Primary access: http://\$PUBLIC_IP\"
-              fi
-              
-            else
-              echo '❌ === DEPLOYMENT FAILED ===\\n⚠️  No containers are running'
-              echo ''
-              echo '🔍 Troubleshooting information:'
-              echo '📋 All containers (including stopped):'
-              docker ps -a
-              echo ''
-              echo '📋 Recent Docker logs:'
-              docker logs \$(docker ps -aq | head -1) 2>/dev/null | tail -20 || echo 'No logs available'
-            fi
-            
-            # Show recent logs
-            echo ''
-            echo '📝 Recent container logs:'
-            if [[ -n \"\$COMPOSE_CMD\" ]]; then
-              \$COMPOSE_CMD logs --tail=10 2>/dev/null || docker logs \$(docker ps -q | head -1) 2>/dev/null || echo 'Logs unavailable'
-            else
-              docker logs \$(docker ps -q | head -1) 2>/dev/null || echo 'Logs unavailable'
-            fi
-          " || {
-            echo "⚠️ Failed to start ATS services"
-          }
-
-      - name: 🧪 Test Game Server
-        run: |
-          echo "🧪 Testing ATS game server..."
-          
-          # Wait a bit for services to start and DNS to propagate
-          echo "⏳ Waiting for services to start and DNS to propagate..."
-          sleep 30
-          
-          TAILSCALE_IP="${{ needs.deploy-ats.outputs.tailscale_ip }}"
-          
-          # Test web interface via multiple methods
-          echo "🌐 Testing web interface..."
-          
-          # Method 1: Test via Tailscale IP (most likely to work)
-          if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" ]] && timeout 10 curl -f http://$TAILSCALE_IP 2>/dev/null; then
-            echo "✅ ATS web interface responding via Tailscale IP (port 80)"
-          elif [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" ]] && timeout 10 curl -f http://$TAILSCALE_IP:8080 2>/dev/null; then
-            echo "✅ ATS web interface responding via Tailscale IP (port 8080)"
-          elif [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" ]] && timeout 10 curl -s http://$TAILSCALE_IP | grep -i "ats\|truck\|server" >/dev/null; then
-            echo "✅ ATS web page detected via Tailscale IP (contains expected content)"
-          # Method 2: Test via public domain
-          elif timeout 10 curl -f http://ats.7gram.xyz 2>/dev/null; then
-            echo "✅ ATS web interface responding via public domain (port 80)"
-          elif timeout 10 curl -f http://ats.7gram.xyz:8080 2>/dev/null; then
-            echo "✅ ATS web interface responding via public domain (port 8080)"
-          elif timeout 10 curl -s http://ats.7gram.xyz | grep -i "ats\|truck\|server" >/dev/null; then
-            echo "✅ ATS web page detected via public domain (contains expected content)"
-          else
-            echo "⚠️ ATS web interface not responding via any method"
-            echo "🔍 Let's check what's actually running on the server..."
-            
-            # Get more detailed info about what's running
-            if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" ]]; then
-              echo "📊 Port scan results:"
-              timeout 5 nmap -p 80,8080,27015,19999 $TAILSCALE_IP 2>/dev/null || echo "nmap not available"
-              
-              # Try to get a raw response
-              echo "📝 Raw HTTP response:"
-              timeout 5 curl -s http://$TAILSCALE_IP | head -10 || echo "No HTTP response"
-            fi
-          fi
-          
-          # Test game server port if accessible
-          echo "🎮 Testing game server port..."
-          
-          if timeout 5 bash -c "</dev/tcp/ats/27015" 2>/dev/null; then
-            echo "✅ Game server port accessible via Tailscale hostname"
-          elif [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" ]] && timeout 5 bash -c "</dev/tcp/$TAILSCALE_IP/27015" 2>/dev/null; then
-            echo "✅ Game server port accessible via Tailscale IP"
-          elif timeout 5 bash -c "</dev/tcp/ats.7gram.xyz/27015" 2>/dev/null; then
-            echo "✅ Game server port accessible via public domain"
-          else
-            echo "ℹ️ Game server port not accessible externally (may be behind firewall or still starting)"
-            echo "   This is normal if the game server only accepts connections from Tailscale network"
-          fi
-          
-          echo "🎮 ATS game server setup complete!"
-          echo "📊 Access URLs:"
-          echo "  - Tailscale: http://ats:8080 or http://$TAILSCALE_IP:8080"
-          echo "  - Public: https://ats.7gram.xyz (after DNS propagation)"
-          
-          # Final deployment verification
-          echo ""
-          echo "🎯 Final Deployment Verification:"
-          echo "================================"
-          
-          # Summary of what was accomplished
-          if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" ]]; then
-            echo "✅ Server connected to Tailscale: $TAILSCALE_IP"
-          else
-            echo "⚠️ Tailscale connection status unclear"
-          fi
-          
-          DNS_UPDATED="true"  # Assume DNS was updated in previous step
-          if [[ -n "$DNS_UPDATED" && "$DNS_UPDATED" == "true" ]]; then
-            echo "✅ DNS record updated for ats.7gram.xyz"
-          else
-            echo "⚠️ DNS update status unclear"
-          fi
-          
-          # Check repository status
-          sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@$TAILSCALE_IP "
-            if [[ -d '/home/ats_user/ats/.git' ]]; then
-              echo '✅ ATS repository cloned successfully'
-              cd /home/ats_user/ats && git log --oneline -1 | sed 's/^/    Latest commit: /'
-            else
-              echo '⚠️ ATS repository not found'
-            fi
-            
-            RUNNING_CONTAINERS=\$(docker ps --format 'table {{.Names}}\t{{.Status}}' | grep -v 'NAMES' | wc -l)
-            if [ \"\$RUNNING_CONTAINERS\" -gt 0 ]; then
-              echo '✅ Docker services running: '\$RUNNING_CONTAINERS' containers active'
-            else
-              echo '❌ No Docker containers running'
-            fi
-          " 2>/dev/null || echo "⚠️ Could not verify repository and container status"
-          
-          echo ""
-          echo ""
-          echo "� **Testing Summary:**"
-          echo "  • Basic connectivity tests completed"
-          echo "  • Game server port availability checked"
-          echo "  • Web interface accessibility verified"
-          echo ""
-          echo "🎮 **Connection Info:**"
-          echo "  • Game Server: ats.7gram.xyz:27015"
-          echo "  • Web Interface: https://ats.7gram.xyz"
-          echo "  • Tailscale Access: http://ats or http://$SERVER_IP"
-          echo ""
-          echo "� **Additional Notes:**"
-          echo "  • Services may take a few minutes to fully initialize"
-          echo "  • Game server should be accessible for multiplayer connections"
-          echo "  • Check Netdata dashboard for detailed monitoring"
-
-      - name: 🐳 Configure Tailscale Docker Subnets
-        env:
-          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
-          SSHPASS: ${{ secrets.ACTIONS_USER_PASSWORD }}
-        if: env.TAILSCALE_AUTHKEY != ''
-        run: |
-          echo "🐳 Configuring Tailscale to advertise Docker subnets on ATS server..."
-          
-          # Install sshpass for server connection
-          sudo apt-get update && sudo apt-get install -y sshpass >/dev/null 2>&1
-          
-          # Connect to server and configure Tailscale subnet routing
-          TAILSCALE_IP="${{ needs.deploy-ats.outputs.tailscale_ip }}"
-          
-          # Determine connection method
-          if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" && "$TAILSCALE_IP" != "pending" ]]; then
-            SERVER_HOST="$TAILSCALE_IP"
-            echo "🔗 Using Tailscale IP: $SERVER_HOST"
-          elif [[ -n "$SERVER_IP" && "$SERVER_IP" != "null" ]]; then
-            SERVER_HOST="$SERVER_IP"
-            echo "🔗 Using public IP: $SERVER_HOST"
-          else
-            echo "⚠️ No valid server IP available for configuration"
-            exit 0
-          fi
-          
-          echo "🐳 Configuring Docker subnet advertisement on ATS server..."
-          
-          # SSH to server and configure Tailscale subnet routing
-          sshpass -e ssh -o StrictHostKeyChecking=no ats_user@$SERVER_HOST "
-            echo '🔍 Getting Docker network information...'
-            
-            # Get Docker bridge network CIDR
-            DOCKER_SUBNET=\$(docker network inspect bridge --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo '172.17.0.0/16')
-            echo \"Default Docker subnet: \$DOCKER_SUBNET\"
-            
-            # Get any custom networks that might exist
-            ATS_NETWORKS=\$(docker network ls --format '{{.Name}}' | grep -E 'ats|game' || echo '')
-            for network in \$ATS_NETWORKS; do
-              if [[ -n \"\$network\" ]]; then
-                NETWORK_SUBNET=\$(docker network inspect \$network --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || echo '')
-                if [[ -n \"\$NETWORK_SUBNET\" ]]; then
-                  echo \"Found ATS network \$network subnet: \$NETWORK_SUBNET\"
-                fi
-              fi
-            done
-            
-            # Configure Tailscale to advertise Docker subnets
-            echo '🌐 Configuring Tailscale subnet advertisement...'
-            
-            # For now, just advertise the main Docker bridge network
-            SUBNETS=\"\$DOCKER_SUBNET\"
-            echo \"Advertising subnets: \$SUBNETS\"
-            
-            # Configure Tailscale with subnet routing
-            sudo tailscale up --advertise-routes=\"\$SUBNETS\" --accept-routes || {
-              echo '⚠️ Failed to configure subnet routing, trying basic reconnection...'
-              sudo tailscale up --accept-routes
-            }
-            
-            # Verify configuration
-            echo '✅ Tailscale subnet configuration completed'
-            tailscale status || echo 'Tailscale status check failed'
-            
-          " || echo "⚠️ Failed to configure Tailscale subnets"
-
-      - name: 📊 Verify Netdata Cloud Connection
-        env:
-          SSHPASS: ${{ secrets.ACTIONS_USER_PASSWORD }}
-        run: |
-          echo "📊 Verifying Netdata cloud connection..."
-          
-          TAILSCALE_IP="${{ needs.deploy-ats.outputs.tailscale_ip }}"
-          
-          # Determine server connection method (same as before)
-          if timeout 10 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ats_user@ats "echo 'Connected'" 2>/dev/null; then
-            SERVER_HOST="ats"
-          elif [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" && "$TAILSCALE_IP" != "pending" ]] && timeout 10 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ats_user@$TAILSCALE_IP "echo 'Connected'" 2>/dev/null; then
-            SERVER_HOST="$TAILSCALE_IP"
-          elif timeout 10 sshpass -e ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 ats_user@ats.7gram.xyz "echo 'Connected'" 2>/dev/null; then
-            SERVER_HOST="ats.7gram.xyz"
-          else
-            echo "⚠️ Cannot connect to check Netdata status"
-            exit 0
-          fi
-          
-          echo "🔍 Checking Netdata status on $SERVER_HOST..."
-          
-          # Check if Netdata is running and accessible
-          sshpass -e ssh -o StrictHostKeyChecking=no ats_user@$SERVER_HOST "
-            echo '📊 Netdata service status:'
-            sudo systemctl is-active netdata && echo '✅ Netdata service is active' || echo '⚠️ Netdata service is not active'
-            
-            echo ''
-            echo '🌐 Testing Netdata web interface:'
-            if curl -f http://localhost:19999/api/v1/info 2>/dev/null >/dev/null; then
-              echo '✅ Netdata web interface is accessible'
-            else
-              echo '⚠️ Netdata web interface is not accessible'
-            fi
-            
-            echo ''
-            echo '☁️ Checking Netdata cloud connection:'
-            if [[ -f /var/lib/netdata/cloud.d/token ]]; then
-              echo '✅ Netdata cloud token file exists'
-            else
-              echo '⚠️ Netdata cloud token file not found'
-            fi
-            
-            # Check if claiming is successful
-            if [[ -f /var/lib/netdata/registry/netdata.public.unique.id ]]; then
-              echo '✅ Netdata unique ID exists'
-              NETDATA_ID=\$(cat /var/lib/netdata/registry/netdata.public.unique.id 2>/dev/null || echo 'unknown')
-              echo 'Netdata ID: '\$NETDATA_ID
-            else
-              echo '⚠️ Netdata unique ID not found'
-            fi
-            
-            # Try to reclaim if needed
-            if [[ ! -f /var/lib/netdata/cloud.d/token ]]; then
-              echo ''
-              echo '🔄 Attempting to reclaim Netdata to cloud...'
-              
-              # Find the claim script
-              CLAIM_SCRIPT=''
-              for script_path in \"/usr/sbin/netdata-claim.sh\" \"/opt/netdata/bin/netdata-claim.sh\" \"/usr/libexec/netdata/netdata-claim.sh\" \"/usr/lib/netdata/netdata-claim.sh\"; do
-                if [[ -f \"\$script_path\" ]]; then
-                  CLAIM_SCRIPT=\$script_path
-                  break
-                fi
-              done
-              
-              if [[ -z \"\$CLAIM_SCRIPT\" ]]; then
-                CLAIM_SCRIPT=\$(find /usr /opt -name \"netdata-claim.sh\" 2>/dev/null | head -1)
-              fi
-              
-              if [[ -n \"\$CLAIM_SCRIPT\" && -f \"\$CLAIM_SCRIPT\" ]]; then
-                echo \"Found claim script: \$CLAIM_SCRIPT\"
-                sudo \"\$CLAIM_SCRIPT\" -token=\"${{ secrets.NETDATA_CLAIM_TOKEN }}\" \\
-                  -rooms=\"${{ secrets.NETDATA_CLAIM_ROOM }}\" \\
-                  -url=\"https://app.netdata.cloud\" && \\
-                  echo '✅ Netdata reclaim completed' || echo '⚠️ Netdata reclaim failed'
-                
-                # Restart Netdata after claiming
-                sudo systemctl restart netdata
-                sleep 5
-              else
-                echo '⚠️ Netdata claim script not found'
-              fi
-            fi
-          " || echo "⚠️ Failed to check Netdata status"
-          
-          echo ""
-          echo "📊 Netdata URLs:"
-          echo "  - Local: http://ats:19999 or http://$TAILSCALE_IP:19999"
-          echo "  - Cloud: https://app.netdata.cloud (if claimed successfully)"
+          echo "✅ **ATS deployment using shared workflow complete!**"
+          echo "📖 For detailed logs, check the shared workflow jobs"
