@@ -60,8 +60,8 @@ on:
         options:
           - 'g6-nanode-1'          # 1GB RAM - $5/month (sufficient for lightweight game server)
           - 'g6-standard-1'        # 2GB RAM - $12/month
-          - 'g6-standard-2'        # 4GB RAM - $20/month
-          - 'g6-standard-4'        # 8GB RAM - $40/month
+          - 'g6-standard-2'        # 4GB RAM - $24/month
+          - 'g6-standard-4'        # 8GB RAM - $48/month
         default: 'g6-nanode-1'
       
       overwrite_server:
@@ -85,14 +85,16 @@ jobs:
   # ATS Game Server Deployment using Shared Workflow
   deploy-ats:
     name: 🎮 Deploy ATS Game Server
+    if: ${{ inputs.action_type != 'destroy' || inputs.confirm_destruction == 'DESTROY' }}
     uses: nuniesmith/actions/.github/workflows/deploy.yml@main
     with:
       service_name: 'ats'
+      source_repository: 'ats'
       action_type: ${{ inputs.action_type || 'deploy' }}
       server_type: ${{ inputs.server_type || 'g6-nanode-1' }}  # $5/month basic server - perfect for lightweight game server
       target_region: ${{ inputs.target_region || 'ca-central' }}
       domain_suffix: '7gram.xyz'
-      overwrite_server: true
+      overwrite_server: ${{ inputs.overwrite_server || true }}
     secrets:
       LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
       SERVICE_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
@@ -129,12 +131,20 @@ jobs:
           echo "🎯 **Action:** ${{ inputs.action_type || 'deploy' }}"
           echo ""
           
+          # Add destruction confirmation check
+          if [[ "${{ inputs.action_type }}" == "destroy" && "${{ inputs.confirm_destruction }}" != "DESTROY" ]]; then
+            echo "⚠️ **Destruction Prevented:**"
+            echo "  • To destroy the server, you must type 'DESTROY' in the confirm_destruction field"
+            echo "  • This is a safety measure to prevent accidental destruction"
+            echo ""
+          fi
+          
           if [[ "$DEPLOY_RESULT" == "success" ]]; then
             echo "🎮 **ATS Game Server:**"
             echo "  • Server ID: ${ATS_SERVER_ID:-'Check workflow logs'}"
             echo "  • Public IP: ${ATS_SERVER_IP:-'Check workflow logs'}"
             echo "  • Tailscale IP: ${TAILSCALE_IP:-'Check workflow logs'}"
-            echo "  • Server Type: ${{ inputs.server_type || 'g6-nanode-1' }} (1GB RAM)"
+            echo "  • Server Type: ${{ inputs.server_type || 'g6-nanode-1' }} (1GB RAM - \$5/month)"
             echo "  • Operating System: Arch Linux"
             echo "  • Region: ${{ inputs.target_region || 'ca-central' }}"
             echo ""
@@ -161,11 +171,31 @@ jobs:
             echo "  ✅ DNS: Cloudflare records updated with Tailscale IP"
             echo "  ✅ Service: ATS game server deployed and running"
             echo ""
+            echo "💰 **Infrastructure Cost:**"
+            case "${{ inputs.server_type || 'g6-nanode-1' }}" in
+              "g6-nanode-1")
+                echo "  • Server Cost: \$5/month (1GB RAM - g6-nanode-1)"
+                ;;
+              "g6-standard-1")
+                echo "  • Server Cost: \$12/month (2GB RAM - g6-standard-1)"
+                ;;
+              "g6-standard-2")
+                echo "  • Server Cost: \$24/month (4GB RAM - g6-standard-2)"
+                ;;
+              "g6-standard-4")
+                echo "  • Server Cost: \$48/month (8GB RAM - g6-standard-4)"
+                ;;
+              *)
+                echo "  • Server Cost: Variable (custom server type)"
+                ;;
+            esac
+            echo "  • Total Monthly Cost: Above amount (single server deployment)"
+            echo ""
             echo "🎮 **Game Server Info:**"
             echo "  • Port: 27015 (TCP/UDP)"
             echo "  • Max Players: 8 (configurable)"
             echo "  • Game Mode: American Truck Simulator Multiplayer"
-            echo "  • Cost: \$5/month (reduced from \$40/month for lightweight server)"
+            echo "  • Cost: \$5/month (optimized for lightweight game server)"
             echo ""
             echo "🔧 **Next Steps:**"
             echo "  1. Wait 2-5 minutes for DNS propagation"
