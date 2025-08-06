@@ -1,7 +1,10 @@
 services:
   # ATS Dedicated Game Server
   ats-server:
-    image: ats-server-fixed
+    build:
+      context: .
+      dockerfile: Dockerfile.ats-server
+    image: ${ATS_SERVER_IMAGE:-nuniesmith/ats:server-latest}
     container_name: ats-dedicated-server
     ports:
       - "27015:27015/tcp"  # ATS multiplayer port
