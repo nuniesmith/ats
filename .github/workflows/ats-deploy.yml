@@ -107,11 +107,73 @@ jobs:
       CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
 
+  # Custom DNS Updates for ATS - Multiple Records
+  dns-update-ats:
+    name: 🌐 Update ATS DNS Records
+    runs-on: ubuntu-latest
+    needs: [deploy-ats]
+    if: |
+      needs.deploy-ats.result == 'success' &&
+      needs.deploy-ats.outputs.tailscale_ip != ''
+    
+    steps:
+      - name: 📁 Checkout Actions Repository
+        uses: actions/checkout@v4
+        with:
+          repository: nuniesmith/actions
+          token: ${{ github.token }}
+      
+      - name: 🌐 Update Multiple ATS DNS Records
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TAILSCALE_IP: ${{ needs.deploy-ats.outputs.tailscale_ip }}
+        run: |
+          echo "🌐 Updating multiple DNS records for ATS service..."
+          echo "📍 Tailscale IP: $TAILSCALE_IP"
+          
+          # Make the DNS updater script executable
+          chmod +x ./scripts/dns/cloudflare-updater.sh
+          
+          # List of ATS subdomains to update
+          SUBDOMAINS=(
+            "ats"           # ats.7gram.xyz
+            "www.ats"       # www.ats.7gram.xyz  
+            "api.ats"       # api.ats.7gram.xyz
+            "game.ats"      # game.ats.7gram.xyz
+            "server.ats"    # server.ats.7gram.xyz
+          )
+          
+          # Update each DNS record
+          for subdomain in "${SUBDOMAINS[@]}"; do
+            echo "🔄 Updating DNS record: ${subdomain}.7gram.xyz → $TAILSCALE_IP"
+            
+            ./scripts/dns/cloudflare-updater.sh update-service \
+              --service "$subdomain" \
+              --ip "$TAILSCALE_IP" \
+              --domain "7gram.xyz" \
+              --token "$CLOUDFLARE_API_TOKEN" \
+              --zone-id "$CLOUDFLARE_ZONE_ID" || {
+                echo "⚠️ Failed to update $subdomain.7gram.xyz - continuing with others"
+              }
+            
+            # Small delay between updates to avoid rate limiting
+            sleep 2
+          done
+          
+          echo "✅ All ATS DNS records update completed!"
+          echo "🌐 The following domains now point to $TAILSCALE_IP:"
+          echo "   • ats.7gram.xyz"
+          echo "   • www.ats.7gram.xyz"
+          echo "   • api.ats.7gram.xyz"
+          echo "   • game.ats.7gram.xyz"
+          echo "   • server.ats.7gram.xyz"
+
   # Post-deployment summary
   deployment-summary:
     name: 📊 ATS Deployment Summary
     runs-on: ubuntu-latest
-    needs: [deploy-ats]
+    needs: [deploy-ats, dns-update-ats]
     if: always()
     
     steps:
@@ -149,9 +211,14 @@ jobs:
             echo "  • Region: ${{ inputs.target_region || 'ca-central' }}"
             echo ""
             echo "🌐 **DNS Configuration:**"
-            echo "  ✅ DNS records updated automatically by shared workflow"
+            echo "  ✅ Multiple DNS records updated automatically"
             echo "  🔧 Cloudflare integration with Tailscale IP updates"
-            echo "  📋 Domain: ats.7gram.xyz → $TAILSCALE_IP"
+            echo "  📋 Updated DNS records pointing to $TAILSCALE_IP:"
+            echo "     • ats.7gram.xyz (main domain)"
+            echo "     • www.ats.7gram.xyz (web interface)"
+            echo "     • api.ats.7gram.xyz (API endpoint)"
+            echo "     • game.ats.7gram.xyz (game server)"
+            echo "     • server.ats.7gram.xyz (server management)"
             echo ""
             echo "🔗 **Access Methods:**"
             if [[ -n "$ATS_SERVER_IP" ]]; then
@@ -161,14 +228,17 @@ jobs:
               echo "  • SSH (Tailscale): ssh root@$TAILSCALE_IP"
               echo "  • Game Server (Tailscale): $TAILSCALE_IP:27015"
             fi
-            echo "  • Game Server (public): ats.7gram.xyz:27015"
-            echo "  • Web Interface: https://ats.7gram.xyz"
+            echo "  • Primary Domain: https://ats.7gram.xyz"
+            echo "  • Web Interface: https://www.ats.7gram.xyz"
+            echo "  • API Endpoint: https://api.ats.7gram.xyz"
+            echo "  • Game Server: game.ats.7gram.xyz:27015"
+            echo "  • Server Management: https://server.ats.7gram.xyz"
             echo ""
             echo "🔧 **Stage Process Completed:**"
             echo "  ✅ Stage 0: Preflight validation on GitHub runner"
             echo "  ✅ Stage 1: Arch Linux setup and Docker installation"
             echo "  ✅ Stage 2: Tailscale OAuth authentication via systemd"
-            echo "  ✅ DNS: Cloudflare records updated with Tailscale IP"
+            echo "  ✅ DNS: Multiple Cloudflare records updated with Tailscale IP"
             echo "  ✅ Service: ATS game server deployed and running"
             echo ""
             echo "💰 **Infrastructure Cost:**"
@@ -200,8 +270,16 @@ jobs:
             echo "🔧 **Next Steps:**"
             echo "  1. Wait 2-5 minutes for DNS propagation"
             echo "  2. Game server will be available shortly"
-            echo "  3. Connect using: ats.7gram.xyz:27015"
-            echo "  4. Monitor performance via server logs"
+            echo "  3. Connect using any of these domains:"
+            echo "     • Primary: ats.7gram.xyz:27015"
+            echo "     • Game: game.ats.7gram.xyz:27015"
+            echo "     • Server: server.ats.7gram.xyz:27015"
+            echo "  4. Access web interfaces:"
+            echo "     • Main: https://ats.7gram.xyz"
+            echo "     • Web: https://www.ats.7gram.xyz"
+            echo "     • API: https://api.ats.7gram.xyz"
+            echo "     • Management: https://server.ats.7gram.xyz"
+            echo "  5. Monitor performance via server logs"
             echo ""
           elif [[ "$DEPLOY_RESULT" == "failure" ]]; then
             echo "❌ **Deployment Failed**"
