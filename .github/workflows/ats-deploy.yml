@@ -4,8 +4,6 @@
 # Required GitHub Secrets:
 # - ATS_ROOT_PASSWORD: Root password for ATS server
 # - LINODE_CLI_TOKEN: Linode API token for server management
-# - DOCKER_HUB_USERNAME: Docker Hub username for image registry
-# - DOCKER_HUB_TOKEN: Docker Hub access token for image registry
 # - ACTIONS_USER_PASSWORD: Password for actions user account (optional)
 # - JORDAN_PASSWORD: Password for jordan user account (optional)
 # - TS_OAUTH_CLIENT_ID: Tailscale OAuth client ID
@@ -15,13 +13,16 @@
 # - CLOUDFLARE_ZONE_ID: Cloudflare zone ID
 # - ADMIN_EMAIL: Admin email for monitoring/alerts (optional)
 #
+# Note: Docker images are built locally on the server during deployment
+# rather than being pushed to Docker Hub registry.
+#
 # This workflow deploys an ATS game server with:
 # - Linode server provisioning (Arch Linux)
 # - Stage 0: Preflight validation on GitHub runner
 # - Stage 1: Arch Linux setup and Docker installation
 # - Stage 2: Tailscale OAuth authentication via systemd service
 # - Cloudflare DNS updates with Tailscale IP
-# - Docker containerization
+# - Local Docker image building and containerization
 #
 name: 🚀 Deploy ATS Game Server
 
@@ -81,68 +82,9 @@ on:
         type: string
 
 jobs:
-  # Docker Build and Push for ATS Server
-  docker-build:
-    name: 🐳 Build and Push ATS Docker Images
-    runs-on: ubuntu-latest
-    if: inputs.action_type == 'deploy' || inputs.action_type == null
-    outputs:
-      build_status: ${{ steps.build.outputs.status }}
-    
-    steps:
-      - name: 📁 Checkout ATS Repository
-        uses: actions/checkout@v4
-        with:
-          repository: nuniesmith/ats
-          token: ${{ github.token }}
-      
-      - name: 🔧 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: 🔑 Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_TOKEN }}
-      
-      - name: 🐳 Build and Push ATS Docker Images
-        id: build
-        run: |
-          echo "🐳 Building ATS Docker images..."
-          
-          # Set image tag based on branch
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            TAG="latest"
-          else
-            TAG="${{ github.ref_name }}"
-          fi
-          
-          echo "📦 Building with tag: $TAG"
-          
-          # Build and push ATS server image
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            --tag nuniesmith/ats:server-$TAG \
-            --file Dockerfile.ats-server \
-            --push .
-          
-          # Build and push ATS web interface if it exists
-          if [[ -f "src/web/Dockerfile" ]]; then
-            docker buildx build \
-              --platform linux/amd64,linux/arm64 \
-              --tag nuniesmith/ats:web-$TAG \
-              --file src/web/Dockerfile \
-              --push src/web/
-          fi
-          
-          echo "✅ All ATS Docker images built and pushed successfully"
-          echo "status=success" >> $GITHUB_OUTPUT
-
   # ATS Game Server Deployment using Shared Workflow
   deploy-ats:
     name: 🎮 Deploy ATS Game Server
-    needs: [docker-build]
-    if: always() && (needs.docker-build.result == 'success' || inputs.action_type != 'deploy')
     uses: nuniesmith/actions/.github/workflows/deploy.yml@main
     with:
       service_name: 'ats'
@@ -167,13 +109,12 @@ jobs:
   deployment-summary:
     name: 📊 ATS Deployment Summary
     runs-on: ubuntu-latest
-    needs: [docker-build, deploy-ats]
+    needs: [deploy-ats]
     if: always()
     
     steps:
       - name: 📊 Display ATS Deployment Summary
         env:
-          DOCKER_BUILD_RESULT: ${{ needs.docker-build.result }}
           ATS_SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
           ATS_SERVER_ID: ${{ needs.deploy-ats.outputs.server_id }}
           TAILSCALE_IP: ${{ needs.deploy-ats.outputs.tailscale_ip }}
@@ -184,7 +125,6 @@ jobs:
           echo "====================================="
           echo ""
           echo "📊 **Deployment Results:**"
-          echo "  🐳 Docker Build: $DOCKER_BUILD_RESULT"
           echo "  🎮 ATS Server: $DEPLOY_RESULT"
           echo "🎯 **Action:** ${{ inputs.action_type || 'deploy' }}"
           echo ""
