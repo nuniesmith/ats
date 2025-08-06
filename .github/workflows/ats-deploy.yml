@@ -150,7 +150,7 @@ jobs:
       server_type: ${{ inputs.server_type || 'g6-nanode-1' }}  # $5/month basic server - perfect for lightweight game server
       target_region: ${{ inputs.target_region || 'ca-central' }}
       domain_suffix: '7gram.xyz'
-      overwrite_server: ${{ inputs.overwrite_server || false }}
+      overwrite_server: true
     secrets:
       LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
       SERVICE_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
