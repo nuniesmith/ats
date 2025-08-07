@@ -130,7 +130,7 @@ jobs:
           TAILSCALE_IP: ${{ needs.deploy-ats.outputs.tailscale_ip }}
         run: |
           echo "🌐 Updating multiple DNS records for ATS service..."
-          echo "📍 Tailscale IP: $TAILSCALE_IP"
+          echo "📍 Tailscale IP: ${TAILSCALE_IP:-'Not available'}"
           
           # Make the DNS updater script executable
           chmod +x ./scripts/dns/cloudflare-updater.sh
@@ -146,14 +146,14 @@ jobs:
           
           # Update each DNS record
           for subdomain in "${SUBDOMAINS[@]}"; do
-            echo "🔄 Updating DNS record: ${subdomain}.7gram.xyz → $TAILSCALE_IP"
+            echo "🔄 Updating DNS record: ${subdomain}.7gram.xyz → ${TAILSCALE_IP:-'Not available'}"
             
             ./scripts/dns/cloudflare-updater.sh update-service \
               --service "$subdomain" \
-              --ip "$TAILSCALE_IP" \
+              --ip "${TAILSCALE_IP:-}" \
               --domain "7gram.xyz" \
-              --token "$CLOUDFLARE_API_TOKEN" \
-              --zone-id "$CLOUDFLARE_ZONE_ID" || {
+              --token "${CLOUDFLARE_API_TOKEN:-}" \
+              --zone-id "${CLOUDFLARE_ZONE_ID:-}" || {
                 echo "⚠️ Failed to update $subdomain.7gram.xyz - continuing with others"
               }
             
@@ -162,7 +162,7 @@ jobs:
           done
           
           echo "✅ All ATS DNS records update completed!"
-          echo "🌐 The following domains now point to $TAILSCALE_IP:"
+          echo "🌐 The following domains now point to ${TAILSCALE_IP:-'the new server IP'}:"
           echo "   • ats.7gram.xyz"
           echo "   • www.ats.7gram.xyz"
           echo "   • api.ats.7gram.xyz"
@@ -189,7 +189,7 @@ jobs:
           echo "====================================="
           echo ""
           echo "📊 **Deployment Results:**"
-          echo "  🎮 ATS Server: $DEPLOY_RESULT"
+          echo "  🎮 ATS Server: ${DEPLOY_RESULT:-'Unknown'}"
           echo "🎯 **Action:** ${{ inputs.action_type || 'deploy' }}"
           echo ""
           
@@ -201,7 +201,7 @@ jobs:
             echo ""
           fi
           
-          if [[ "$DEPLOY_RESULT" == "success" ]]; then
+          if [[ "${DEPLOY_RESULT:-}" == "success" ]]; then
             echo "🎮 **ATS Game Server:**"
             echo "  • Server ID: ${ATS_SERVER_ID:-'Check workflow logs'}"
             echo "  • Public IP: ${ATS_SERVER_IP:-'Check workflow logs'}"
@@ -213,7 +213,7 @@ jobs:
             echo "🌐 **DNS Configuration:**"
             echo "  ✅ Multiple DNS records updated automatically"
             echo "  🔧 Cloudflare integration with Tailscale IP updates"
-            echo "  📋 Updated DNS records pointing to $TAILSCALE_IP:"
+            echo "  📋 Updated DNS records pointing to ${TAILSCALE_IP:-'the new server IP'}:"
             echo "     • ats.7gram.xyz (main domain)"
             echo "     • www.ats.7gram.xyz (web interface)"
             echo "     • api.ats.7gram.xyz (API endpoint)"
@@ -221,12 +221,12 @@ jobs:
             echo "     • server.ats.7gram.xyz (server management)"
             echo ""
             echo "🔗 **Access Methods:**"
-            if [[ -n "$ATS_SERVER_IP" ]]; then
-              echo "  • SSH (public): ssh root@$ATS_SERVER_IP"
+            if [[ -n "${ATS_SERVER_IP:-}" ]]; then
+              echo "  • SSH (public): ssh root@${ATS_SERVER_IP}"
             fi
-            if [[ -n "$TAILSCALE_IP" ]]; then
-              echo "  • SSH (Tailscale): ssh root@$TAILSCALE_IP"
-              echo "  • Game Server (Tailscale): $TAILSCALE_IP:27015"
+            if [[ -n "${TAILSCALE_IP:-}" ]]; then
+              echo "  • SSH (Tailscale): ssh root@${TAILSCALE_IP}"
+              echo "  • Game Server (Tailscale): ${TAILSCALE_IP}:27015"
             fi
             echo "  • Primary Domain: https://ats.7gram.xyz"
             echo "  • Web Interface: https://www.ats.7gram.xyz"
@@ -281,14 +281,14 @@ jobs:
             echo "     • Management: https://server.ats.7gram.xyz"
             echo "  5. Monitor performance via server logs"
             echo ""
-          elif [[ "$DEPLOY_RESULT" == "failure" ]]; then
+          elif [[ "${DEPLOY_RESULT:-}" == "failure" ]]; then
             echo "❌ **Deployment Failed**"
             echo "  • Check individual job logs for details"
             echo "  • Common issues: SSH connectivity, package installation"
             echo "  • Retry deployment after resolving issues"
             echo ""
           else
-            echo "⚠️ **Deployment Status:** $DEPLOY_RESULT"
+            echo "⚠️ **Deployment Status:** ${DEPLOY_RESULT:-'Unknown'}"
             echo "  • Check workflow logs for current status"
             echo ""
           fi
