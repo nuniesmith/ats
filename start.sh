@@ -208,30 +208,35 @@ main() {
         exit 1
     fi
     
-    # Test if we can create a test network
-    if ! docker network create --driver bridge test-network-$$$ >/dev/null 2>&1; then
-        log "WARN" "⚠️ Docker networking appears to be broken."
-        log "INFO" "🔧 Attempting to fix Docker networking without sudo..."
-        
-        # Stop all containers
-        log "INFO" "Stopping all containers..."
-        docker stop $(docker ps -aq) 2>/dev/null || true
-        
-        # Remove all containers
-        docker rm $(docker ps -aq) 2>/dev/null || true
-        
-        # Clean up Docker networks
-        log "INFO" "Cleaning up Docker networks..."
-        docker network prune -f >/dev/null 2>&1 || true
-        
-        log "ERROR" "❌ Docker networking issues detected. This requires administrative privileges to fix."
-        log "ERROR" "Please contact your system administrator to run:"
-        log "ERROR" "  sudo systemctl restart docker"
-        exit 1
+    # In GitHub Actions deployment, skip network creation test since networks are handled by the deployment workflow
+    if [ -n "$GITHUB_ACTIONS" ] || [ "$USER" = "ats_user" ] || [ "$USER" = "root" ]; then
+        log "INFO" "✅ Docker networking check skipped (deployment environment)"
     else
-        # Remove the test network
-        docker network rm test-network-$$$ >/dev/null 2>&1 || true
-        log "INFO" "✅ Docker networking is properly configured"
+        # Test if we can create a test network (only for local environments)
+        if ! docker network create --driver bridge test-network-$$$ >/dev/null 2>&1; then
+            log "WARN" "⚠️ Docker networking appears to be broken."
+            log "INFO" "🔧 Attempting to fix Docker networking without sudo..."
+            
+            # Stop all containers
+            log "INFO" "Stopping all containers..."
+            docker stop $(docker ps -aq) 2>/dev/null || true
+            
+            # Remove all containers
+            docker rm $(docker ps -aq) 2>/dev/null || true
+            
+            # Clean up Docker networks
+            log "INFO" "Cleaning up Docker networks..."
+            docker network prune -f >/dev/null 2>&1 || true
+            
+            log "ERROR" "❌ Docker networking issues detected. This requires administrative privileges to fix."
+            log "ERROR" "Please contact your system administrator to run:"
+            log "ERROR" "  sudo systemctl restart docker"
+            exit 1
+        else
+            # Remove the test network
+            docker network rm test-network-$$$ >/dev/null 2>&1 || true
+            log "INFO" "✅ Docker networking is properly configured"
+        fi
     fi
     
     # Clean up any existing ats-network
