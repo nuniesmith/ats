@@ -6,19 +6,26 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV STEAMCMD_DIR=/opt/steamcmd
 ENV ATS_DIR=/app/ats-server
 ENV USER=ats
+ARG SKIP_STEAMCMD=false
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    wget \
-    curl \
-    lib32gcc-s1 \
-    lib32stdc++6 \
-    libatomic1 \
-    ca-certificates \
-    software-properties-common \
-    unzip \
-    net-tools \
-    supervisor \
+# Install dependencies (including 32-bit libs required by SteamCMD)
+# - Add i386 architecture (needed on amd64 hosts)
+# - Use retries to mitigate transient apt/network issues
+RUN dpkg --add-architecture i386 \
+    && apt-get update -o Acquire::Retries=3 \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        wget \
+        curl \
+        unzip \
+        net-tools \
+        supervisor \
+        software-properties-common \
+        lib32gcc-s1 \
+        lib32stdc++6 \
+        libatomic1 \
+        libc6:i386 \
+        libstdc++6:i386 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create user for running the server
@@ -57,7 +64,11 @@ USER $USER
 WORKDIR $ATS_DIR
 
 # Install ATS dedicated server via SteamCMD
-RUN /usr/local/bin/install_ats_server.sh
+RUN if [ "$SKIP_STEAMCMD" != "true" ]; then \
+            /usr/local/bin/install_ats_server.sh; \
+        else \
+            echo "Skipping SteamCMD install during build (SKIP_STEAMCMD=true)"; \
+        fi
 
 # Create volumes for persistent data
 VOLUME ["$ATS_DIR/data", "$ATS_DIR/logs", "$ATS_DIR/config"]

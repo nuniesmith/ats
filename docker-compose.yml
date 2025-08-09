@@ -4,18 +4,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.ats-server
+      # Force build for x86_64 since ATS dedicated server is x86_64 only
+    platform: linux/amd64
     image: ${ATS_SERVER_IMAGE:-nuniesmith/ats:server-latest}
     container_name: ats-dedicated-server
     ports:
       - "27015:27015/tcp"  # ATS multiplayer port
       - "27015:27015/udp"  # ATS multiplayer port UDP
     volumes:
-      - ats-server-data:/app/data
-      - ats-server-logs:/app/logs
-      - ats-server-config:/app/config
-      - ./config/server_config.sii:/app/config/server_config.sii:ro
-      - ./config/server_packages.sii:/app/config/server_packages.sii:ro
-      - ./config/server_packages.dat:/app/config/server_packages.dat:ro
+      - ats-server-data:/app/ats-server/data
+      - ats-server-logs:/app/ats-server/logs
+      - ats-server-config:/app/ats-server/config
+      - ./config/server_config.sii:/app/ats-server/config/server_config.sii:ro
+      - ./config/server_packages.sii:/app/ats-server/config/server_packages.sii:ro
+      - ./config/server_packages.dat:/app/ats-server/config/server_packages.dat:ro
     environment:
       - TZ=${TZ:-America/Toronto}
       - ATS_SERVER_NAME=${ATS_SERVER_NAME:-ATS Dedicated Server}
@@ -35,7 +37,7 @@ services:
       - ats-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "netstat", "-an", "|", "grep", ":27015"]
+      test: ["CMD-SHELL", "netstat -an | grep :27015 || exit 1"]
       interval: 60s
       timeout: 30s
       retries: 3
@@ -161,7 +163,7 @@ services:
       - ats-web
       - ats-api
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/health", "||", "exit", "1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
