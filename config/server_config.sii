@@ -1,10 +1,10 @@
 SiiNunit
 {
-server_config : .config {
+server_config : _nameless.21e.68a7.fa50 {
  lobby_name: "Freddy's ATS Dedicated Server"
  description: "Enhanced ATS server with curated sound and graphics mods"
- welcome_message: "Welcome to Freddy's server! Enjoy the enhanced experience with optional mods enabled."
- password: "ruby"
+ welcome_message: "Welcome to Freddy's server Enjoy the enhanced experience with optional mods enabled."
+ password: ruby
  max_players: 8
  max_vehicles_total: 100
  max_ai_vehicles_player: 50
@@ -26,8 +26,9 @@ server_config : .config {
  name_tags: true
  friends_only: false
  show_server: true
- moderator_list: 0
- mods: .mods {
- }
+ moderator_list: 2
+ moderator_list[0]: 76561198029569994
+ moderator_list[1]: 76561198175512086
 }
+
 }

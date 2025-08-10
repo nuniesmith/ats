@@ -1,1467 +1,297 @@
-name: 🚀 ATS Server Complete Deployment
+---
+# ATS Game Server Deployment using Shared Deploy Workflow
+#
+# Required GitHub Secrets:
+# - ATS_ROOT_PASSWORD: Root password for ATS server
+# - LINODE_CLI_TOKEN: Linode API token for server management
+# - ACTIONS_USER_PASSWORD: Password for actions user account (optional)
+# - JORDAN_PASSWORD: Password for jordan user account (optional)
+# - TS_OAUTH_CLIENT_ID: Tailscale OAuth client ID
+# - TS_OAUTH_SECRET: Tailscale OAuth client secret
+# - TAILSCALE_TAILNET: Tailscale tailnet name (optional)
+# - CLOUDFLARE_API_TOKEN: Cloudflare API token for DNS management
+# - CLOUDFLARE_ZONE_ID: Cloudflare zone ID
+# - ADMIN_EMAIL: Admin email for monitoring/alerts (optional)
+#
+# Note: Docker images are built locally on the server during deployment
+# rather than being pushed to Docker Hub registry.
+#
+# This workflow deploys an ATS game server with:
+# - Linode server provisioning (Arch Linux)
+# - Stage 0: Preflight validation on GitHub runner
+# - Stage 1: Arch Linux setup and Docker installation
+# - Stage 2: Tailscale OAuth authentication via systemd service
+# - Cloudflare DNS updates with Tailscale IP
+# - Local Docker image building and containerization
+#
+name: 🚀 Deploy ATS Game Server
 
 on:
   push:
     branches: [main, develop]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
-      deployment_mode:
-        description: 'What to deploy'
+      action_type:
+        description: 'Action to perform'
         required: true
         type: choice
         options:
-          - 'full-deploy'          # Deploy both React web app and ATS server
-          - 'web-only'             # Deploy only React web interface
-          - 'docker-only'          # Deploy only Docker containers
-          - 'ats-server-only'      # Deploy only ATS dedicated server
-          - 'update-server'        # Update existing deployment
-        default: 'docker-only'
-      
-      create_new_server:
-        description: 'Create new Linode server for ATS'
-        required: false
-        type: boolean
-        default: true
-      
-      server_type:
-        description: 'Server type to create'
-        required: false
-        type: choice
-        options:
-          - 'g6-standard-1'        # 2GB RAM, 1 CPU (recommended for ATS)
-          - 'g6-standard-2'        # 4GB RAM, 1 CPU 
-          - 'g6-standard-4'        # 8GB RAM, 2 CPU (for multiple servers)
-          - 'g6-standard-8'        # 16GB RAM, 4 CPU (for heavy mod loads)
-        default: 'g6-standard-1'
+          - 'deploy'
+          - 'destroy'
+          - 'health-check'
+          - 'restart'
+        default: 'deploy'
       
       target_region:
-        description: 'Linode region for server'
+        description: 'Linode region'
         required: false
         type: choice
         options:
-          - 'us-east'              # New York/Newark
-          - 'us-central'           # Dallas
-          - 'us-west'              # Los Angeles
-          - 'ca-central'           # Toronto
-          - 'eu-west'              # London
+          - 'ca-central'
+          - 'us-east'
+          - 'us-west'
+          - 'eu-west'
         default: 'ca-central'
-
-env:
-  DEPLOYMENT_MODE: ${{ github.event.inputs.deployment_mode || 'docker-only' }}
-  CREATE_NEW_SERVER: ${{ github.event.inputs.create_new_server || 'true' }}
-  SERVER_TYPE: ${{ github.event.inputs.server_type || 'g6-standard-1' }}
-  TARGET_REGION: ${{ github.event.inputs.target_region || 'ca-central' }}
-  DOMAIN_NAME: ats.7gram.xyz
-  NODE_VERSION: '18'
-  DOCKER_REPO: nuniesmith/ats
-  TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+      
+      server_type:
+        description: 'Linode server type'
+        required: false
+        type: choice
+        options:
+          - 'g6-nanode-1'          # 1GB RAM - $5/month (sufficient for lightweight game server)
+          - 'g6-standard-1'        # 2GB RAM - $12/month
+          - 'g6-standard-2'        # 4GB RAM - $24/month
+          - 'g6-standard-4'        # 8GB RAM - $48/month
+        default: 'g6-nanode-1'
+      
+      overwrite_server:
+        description: 'Destroy and recreate server (use with caution)'
+        required: false
+        type: boolean
+        default: false
+      
+      skip_docker_build:
+        description: 'Skip building Docker images'
+        required: false
+        type: boolean
+        default: false
+      
+      confirm_destruction:
+        description: 'Type "DESTROY" to confirm destruction'
+        required: false
+        type: string
 
 jobs:
-  # ============================================================================
-  # Pre-flight Checks & Validation
-  # ============================================================================
-  preflight-checks:
-    name: 🛫 Pre-flight Checks
-    runs-on: ubuntu-latest
-    outputs:
-      secrets_validated: ${{ steps.validate-secrets.outputs.validated }}
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
+  # ATS Game Server Deployment using Shared Workflow
+  deploy-ats:
+    name: 🎮 Deploy ATS Game Server
+    if: ${{ inputs.action_type != 'destroy' || inputs.confirm_destruction == 'DESTROY' }}
+    uses: nuniesmith/actions/.github/workflows/deploy.yml@main
+    with:
+      service_name: 'ats'
+      source_repository: 'ats'
+      action_type: ${{ inputs.action_type || 'deploy' }}
+      server_type: ${{ inputs.server_type || 'g6-nanode-1' }}  # $5/month basic server - perfect for lightweight game server
+      target_region: ${{ inputs.target_region || 'ca-central' }}
+      domain_suffix: '7gram.xyz'
+      overwrite_server: ${{ inputs.overwrite_server || true }}
+    secrets:
+      LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+      SERVICE_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
+      ACTIONS_USER_PASSWORD: ${{ secrets.ACTIONS_USER_PASSWORD }}
+      JORDAN_PASSWORD: ${{ secrets.JORDAN_PASSWORD }}
+      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+      TAILSCALE_TAILNET: ${{ secrets.TAILSCALE_TAILNET }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
 
-      - name: 🔐 Validate Required Secrets
-        id: validate-secrets
-        env:
-          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
-          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          DOCKER_TOKEN: ${{ secrets.DOCKER_TOKEN }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-        run: |
-          echo "🔐 Validating required secrets..."
-          
-          MISSING_SECRETS=()
-          
-          [[ -z "$LINODE_CLI_TOKEN" ]] && MISSING_SECRETS+=("LINODE_CLI_TOKEN")
-          [[ -z "$ATS_ROOT_PASSWORD" ]] && MISSING_SECRETS+=("ATS_ROOT_PASSWORD")
-          [[ -z "$TAILSCALE_AUTH_KEY" ]] && MISSING_SECRETS+=("TAILSCALE_AUTH_KEY")
-          [[ -z "$JWT_SECRET" ]] && MISSING_SECRETS+=("JWT_SECRET")
-          [[ -z "$DOCKER_USERNAME" ]] && MISSING_SECRETS+=("DOCKER_USERNAME")
-          [[ -z "$DOCKER_TOKEN" ]] && MISSING_SECRETS+=("DOCKER_TOKEN")
-          [[ -z "$CLOUDFLARE_API_TOKEN" ]] && MISSING_SECRETS+=("CLOUDFLARE_API_TOKEN")
-          [[ -z "$CLOUDFLARE_ZONE_ID" ]] && MISSING_SECRETS+=("CLOUDFLARE_ZONE_ID")
-          
-          if [[ ${#MISSING_SECRETS[@]} -gt 0 ]]; then
-            echo "❌ Missing required secrets:"
-            printf '  - %s\n' "${MISSING_SECRETS[@]}"
-            echo "validated=false" >> $GITHUB_OUTPUT
-            exit 1
-          else
-            echo "✅ All required secrets are configured"
-            echo "validated=true" >> $GITHUB_OUTPUT
-          fi
-          
-          # Optional secrets check
-          OPTIONAL_SECRETS=()
-          [[ -z "${{ secrets.DISCORD_WEBHOOK_URL }}" ]] && OPTIONAL_SECRETS+=("DISCORD_WEBHOOK_URL")
-          
-          if [[ ${#OPTIONAL_SECRETS[@]} -gt 0 ]]; then
-            echo "ℹ️ Optional secrets (will disable some features):"
-            printf '  - %s\n' "${OPTIONAL_SECRETS[@]}"
-          fi
-
-  # ============================================================================
-  # Detect File Changes
-  # ============================================================================
-  detect-changes:
-    name: 🔍 Detect Changes
+  # Custom DNS Updates for ATS - Multiple Records
+  dns-update-ats:
+    name: 🌐 Update ATS DNS Records
     runs-on: ubuntu-latest
-    needs: preflight-checks
-    if: needs.preflight-checks.outputs.secrets_validated == 'true'
-    outputs:
-      web-changed: ${{ steps.changes.outputs.web }}
-      api-changed: ${{ steps.changes.outputs.api }}
-      docker-changed: ${{ steps.changes.outputs.docker }}
-      workflow-changed: ${{ steps.changes.outputs.workflow }}
+    needs: [deploy-ats]
+    if: |
+      needs.deploy-ats.result == 'success' &&
+      needs.deploy-ats.outputs.tailscale_ip != ''
+    
     steps:
-      - name: 📥 Checkout repository
+      - name: 📁 Checkout Actions Repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
-
-      - name: 🔍 Check for file changes
-        id: changes
-        run: |
-          # Check if this is a manual trigger or first push
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "Manual trigger - building all"
-            echo "web=true" >> $GITHUB_OUTPUT
-            echo "api=true" >> $GITHUB_OUTPUT
-            echo "docker=true" >> $GITHUB_OUTPUT
-            echo "workflow=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Get changed files
-          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
-          echo "Changed files: $CHANGED_FILES"
-          
-          # Check for web changes
-          if echo "$CHANGED_FILES" | grep -E '^src/web/|^package.*\.json$' >/dev/null 2>&1; then
-            echo "web=true" >> $GITHUB_OUTPUT
-            echo "📦 Web app changes detected"
-          else
-            echo "web=false" >> $GITHUB_OUTPUT
-          fi
-          
-          # Check for API changes
-          if echo "$CHANGED_FILES" | grep -E '^src/api/|^package.*\.json$' >/dev/null 2>&1; then
-            echo "api=true" >> $GITHUB_OUTPUT
-            echo "🔧 API changes detected"
-          else
-            echo "api=false" >> $GITHUB_OUTPUT
-          fi
-          
-          # Check for Docker/deployment changes
-          if echo "$CHANGED_FILES" | grep -E '^docker-compose|Dockerfile|\.dockerignore' >/dev/null 2>&1; then
-            echo "docker=true" >> $GITHUB_OUTPUT
-            echo "🐳 Docker changes detected"
-          else
-            echo "docker=false" >> $GITHUB_OUTPUT
-          fi
-          
-          # Check for workflow changes
-          if echo "$CHANGED_FILES" | grep -E '^\.github/workflows/' >/dev/null 2>&1; then
-            echo "workflow=true" >> $GITHUB_OUTPUT
-            echo "⚙️ Workflow changes detected"
-          else
-            echo "workflow=false" >> $GITHUB_OUTPUT
-          fi
-          
-          # If any changes detected, enable docker builds
-          if [[ "$(echo "$CHANGED_FILES" | grep -E '^src/|Dockerfile|docker-compose|\.github/workflows/' | wc -l)" -gt 0 ]]; then
-            echo "docker=true" >> $GITHUB_OUTPUT
-          fi
-
-  # ============================================================================
-  # Infrastructure Check & Setup
-  # ============================================================================
-  infrastructure-check:
-    name: 🏗️ Infrastructure Check
-    runs-on: ubuntu-latest
-    needs: [preflight-checks, detect-changes]
-    if: needs.preflight-checks.outputs.secrets_validated == 'true'
-    outputs:
-      server-exists: ${{ steps.check-server.outputs.exists }}
-      server-ip: ${{ steps.check-server.outputs.ip }}
-      server-status: ${{ steps.check-server.outputs.status }}
-      should-create: ${{ steps.decision.outputs.create }}
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🔍 Check Existing Linode Servers
-        id: check-server
+          repository: nuniesmith/actions
+          token: ${{ github.token }}
+      
+      - name: 🌐 Update Multiple ATS DNS Records
         env:
-          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TAILSCALE_IP: ${{ needs.deploy-ats.outputs.tailscale_ip }}
         run: |
-          echo "🔍 Checking for existing ATS servers..."
+          echo "🌐 Updating multiple DNS records for ATS service..."
+          echo "📍 Tailscale IP: ${TAILSCALE_IP:-'Not available'}"
           
-          # Skip if no Linode token provided
-          if [[ -z "$LINODE_CLI_TOKEN" ]]; then
-            echo "⚠️ No Linode token provided - skipping server check"
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "ip=" >> $GITHUB_OUTPUT
-            echo "status=" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+          # Make the DNS updater script executable
+          chmod +x ./scripts/dns/cloudflare-updater.sh
           
-          # Check for existing servers using API
-          echo "🔍 Querying Linode API for existing servers..."
-          SERVERS_RESPONSE=$(curl -H "Authorization: Bearer $LINODE_CLI_TOKEN" \
-            "https://api.linode.com/v4/linode/instances" 2>/dev/null)
+          # List of ATS subdomains to update
+          SUBDOMAINS=(
+            "ats"           # ats.7gram.xyz
+            "www.ats"       # www.ats.7gram.xyz  
+            "api.ats"       # api.ats.7gram.xyz
+            "game.ats"      # game.ats.7gram.xyz
+            "server.ats"    # server.ats.7gram.xyz
+          )
           
-          if [[ $? -ne 0 ]]; then
-            echo "❌ Failed to query Linode API"
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "ip=" >> $GITHUB_OUTPUT
-            echo "status=" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          # Look for ATS server
-          SERVER_INFO=$(echo "$SERVERS_RESPONSE" | jq -r '.data[] | select(.label == "ats-server") | "\(.ipv4[0]) \(.status)"' 2>/dev/null)
-          
-          if [ -n "$SERVER_INFO" ]; then
-            SERVER_IP=$(echo "$SERVER_INFO" | awk '{print $1}')
-            SERVER_STATUS=$(echo "$SERVER_INFO" | awk '{print $2}')
+          # Update each DNS record
+          for subdomain in "${SUBDOMAINS[@]}"; do
+            echo "🔄 Updating DNS record: ${subdomain}.7gram.xyz → ${TAILSCALE_IP:-'Not available'}"
             
-            echo "✅ Found existing ATS server:"
-            echo "   Public IP: $SERVER_IP"
-            echo "   Status: $SERVER_STATUS"
-            
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "ip=$SERVER_IP" >> $GITHUB_OUTPUT
-            echo "status=$SERVER_STATUS" >> $GITHUB_OUTPUT
-          else
-            echo "ℹ️ No existing ATS server found"
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "ip=" >> $GITHUB_OUTPUT
-            echo "status=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: 🤔 Deployment Decision
-        id: decision
-        run: |
-          echo "🤔 Making deployment decisions..."
-          
-          SERVER_EXISTS="${{ steps.check-server.outputs.exists }}"
-          CREATE_NEW="${{ env.CREATE_NEW_SERVER }}"
-          DEPLOYMENT_MODE="${{ env.DEPLOYMENT_MODE }}"
-          
-          echo "Server exists: $SERVER_EXISTS"
-          echo "Create new requested: $CREATE_NEW"
-          echo "Deployment mode: $DEPLOYMENT_MODE"
-          
-          if [[ "$SERVER_EXISTS" == "true" ]]; then
-            echo "✅ Server exists - will use existing server"
-            echo "create=false" >> $GITHUB_OUTPUT
-          elif [[ "$CREATE_NEW" == "true" ]]; then
-            echo "🔨 Will create new server"
-            echo "create=true" >> $GITHUB_OUTPUT
-          elif [[ "$DEPLOYMENT_MODE" == "docker-only" || "$DEPLOYMENT_MODE" == "full-deploy" || "$DEPLOYMENT_MODE" == "web-only" ]]; then
-            echo "🔨 Deployment requested but no server exists - will create one"
-            echo "create=true" >> $GITHUB_OUTPUT
-          else
-            echo "ℹ️ No server exists and create_new_server=false"
-            echo "create=false" >> $GITHUB_OUTPUT
-          fi
-
-  # ============================================================================
-  # Create New Server (if needed)
-  # ============================================================================
-  create-server:
-    name: 🔨 Create ATS Server
-    runs-on: ubuntu-latest
-    needs: infrastructure-check
-    if: needs.infrastructure-check.outputs.should-create == 'true'
-    outputs:
-      server-ip: ${{ steps.create.outputs.ip }}
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🔨 Create Linode Server
-        id: create
-        env:
-          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
-          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-        run: |
-          echo "🔨 Creating new ATS server..."
-          
-          # Install Linode CLI
-          pip3 install linode-cli
-          
-          # Configure Linode CLI non-interactively
-          mkdir -p ~/.config/linode-cli
-          cat > ~/.config/linode-cli/config << EOF
-          [DEFAULT]
-          token = $LINODE_CLI_TOKEN
-          region = ${{ env.TARGET_REGION }}
-          type = ${{ env.SERVER_TYPE }}
-          image = linode/arch
-          authorized_users = 
-          EOF
-          
-          # Set LINODE_CLI_TOKEN environment variable to avoid interactive prompts
-          export LINODE_CLI_TOKEN="$LINODE_CLI_TOKEN"
-          
-          # Create the server using API directly to avoid CLI configuration issues
-          echo "🔨 Creating server via Linode API..."
-          RESULT=$(curl -H "Authorization: Bearer $LINODE_CLI_TOKEN" \
-            -H "Content-Type: application/json" \
-            -X POST "https://api.linode.com/v4/linode/instances" \
-            -d "{
-              \"label\": \"ats-server\",
-              \"region\": \"${{ env.TARGET_REGION }}\",
-              \"type\": \"${{ env.SERVER_TYPE }}\",
-              \"image\": \"linode/arch\",
-              \"root_pass\": \"$ATS_ROOT_PASSWORD\",
-              \"booted\": true
-            }")
-          
-          echo "API Response: $RESULT"
-          
-          # Extract server IP
-          SERVER_IP=$(echo "$RESULT" | jq -r '.ipv4[0]')
-          if [[ "$SERVER_IP" == "null" || -z "$SERVER_IP" ]]; then
-            echo "❌ Failed to create server or extract IP"
-            echo "API Response: $RESULT"
-            exit 1
-          fi
-          
-          echo "✅ Server created with IP: $SERVER_IP"
-          echo "ip=$SERVER_IP" >> $GITHUB_OUTPUT
-          
-          # Wait for server to boot
-          echo "⏳ Waiting for server to boot..."
-          sleep 120
-
-      - name: 🔧 Stage 1 - Initial Server Setup
-        env:
-          SERVER_IP: ${{ steps.create.outputs.ip }}
-          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-          NETDATA_CLAIM_TOKEN: ${{ secrets.NETDATA_CLAIM_TOKEN }}
-          NETDATA_CLAIM_ROOM: ${{ secrets.NETDATA_CLAIM_ROOM }}
-        run: |
-          echo "🔧 Stage 1: Initial Arch Linux setup..."
-          
-          # Wait for SSH to be available
-          for i in {1..10}; do
-            if sshpass -p "$ATS_ROOT_PASSWORD" ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$SERVER_IP "echo 'Server ready'"; then
-              echo "✅ SSH connection established"
-              break
-            fi
-            echo "⏳ Waiting for SSH... (attempt $i/10)"
-            sleep 30
-          done
-          
-          # Stage 1: System setup and stage 2 service creation
-          echo "🔧 Setting up environment variables for SSH session..."
-          NETDATA_TOKEN_ENV=""
-          NETDATA_ROOMS_ENV=""
-          
-          if [[ -n "$NETDATA_CLAIM_TOKEN" ]]; then
-            NETDATA_TOKEN_ENV="export NETDATA_CLAIM_TOKEN='$NETDATA_CLAIM_TOKEN';"
-          fi
-          
-          if [[ -n "$NETDATA_CLAIM_ROOM" ]]; then
-            NETDATA_ROOMS_ENV="export NETDATA_CLAIM_ROOM='$NETDATA_CLAIM_ROOM';"
-          fi
-          
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP << EOF
-            $NETDATA_TOKEN_ENV
-            $NETDATA_ROOMS_ENV
-            echo "🔧 Stage 1: System initialization..."
-            
-            # Update system with conflict resolution
-            echo "📦 Updating system packages..."
-            pacman-key --init
-            pacman-key --populate archlinux
-            pacman -Sy --noconfirm archlinux-keyring
-            
-            # Handle known conflicts before system update
-            echo "🔧 Resolving package conflicts..."
-            pacman -R --noconfirm linux-firmware-nvidia 2>/dev/null || echo "linux-firmware-nvidia not installed"
-            pacman -R --noconfirm gpgme 2>/dev/null || echo "gpgme conflict resolved"
-            
-            # Now update system
-            pacman -Syu --noconfirm --overwrite="*"
-            
-            # Install essential packages with verification
-            echo "📦 Installing essential packages..."
-            PACKAGES=(curl wget git unzip nginx docker docker-compose)
-            for pkg in "${PACKAGES[@]}"; do
-              echo "Installing $pkg..."
-              pacman -S --noconfirm --needed "$pkg" || echo "Failed to install $pkg, continuing..."
-            done
-            
-            # Install Tailscale
-            echo "📦 Installing Tailscale..."
-            pacman -S --noconfirm tailscale || {
-              echo "Installing Tailscale from AUR..."
-              curl -fsSL https://tailscale.com/install.sh | sh
-            }
-            
-            # Install Netdata with cloud integration  
-            echo "📦 Installing Netdata with cloud integration..."
-            echo "Installing Netdata manually via kickstart script..."
-            curl -fsSL https://get.netdata.cloud/kickstart.sh | sh -s -- --stable-channel --disable-telemetry --claim-token="${NETDATA_CLAIM_TOKEN:-}" --claim-rooms="${NETDATA_CLAIM_ROOM:-}" --claim-url="https://app.netdata.cloud"
-            
-            # Configure Netdata for cloud access if tokens are provided
-            if [[ -n "${NETDATA_CLAIM_TOKEN:-}" && -n "${NETDATA_CLAIM_ROOM:-}" ]]; then
-              echo "🔗 Configuring Netdata cloud integration..."
-              # Create netdata cloud configuration
-              mkdir -p /etc/netdata
-              cat > /etc/netdata/netdata.conf << 'NETDATAEOF'
-          [global]
-              hostname = ats-server
-              history = 86400
-              memory mode = dbengine
-              page cache size = 32
-              dbengine disk space = 256
-          
-          [web]
-              mode = multi-threaded
-              web files owner = root
-              web files group = netdata
-              bind to = *:19999
-              allow connections from = localhost 10.* 192.168.* 172.16.* 172.17.* 172.18.* 172.19.* 172.20.* 172.21.* 172.22.* 172.23.* 172.24.* 172.25.* 172.26.* 172.27.* 172.28.* 172.29.* 172.30.* 172.31.* 100.*
-          
-          [plugins]
-              proc = yes
-              diskspace = yes
-              cgroups = yes
-              tc = no
-              idlejitter = yes
-              checks = no
-              apps = yes
-              charts.d = yes
-              node.d = yes
-              python.d = yes
-              go.d = yes
-          NETDATAEOF
-              
-              # Claim the node to Netdata Cloud
-              if command -v netdata-claim.sh >/dev/null 2>&1; then
-                netdata-claim.sh -token="${NETDATA_CLAIM_TOKEN}" -rooms="${NETDATA_CLAIM_ROOM}" -url="https://app.netdata.cloud"
-                echo "✅ Netdata claimed to cloud"
-              else
-                echo "⚠️ Netdata claim script not found, will retry in Stage 2"
-              fi
-            else
-              echo "ℹ️ Netdata cloud tokens not provided, running in standalone mode"
-            fi
-            
-            # Install Certbot for SSL certificates
-            echo "📦 Installing Certbot for SSL certificates..."
-            pacman -S --noconfirm --needed certbot python-pip || echo "Failed to install certbot from pacman"
-            
-            # Install DNS Cloudflare plugin via pip (more reliable)
-            echo "📦 Installing Certbot DNS Cloudflare plugin..."
-            pip install --upgrade pip --break-system-packages || echo "Failed to upgrade pip"
-            pip install certbot-dns-cloudflare --break-system-packages || {
-              echo "Failed to install DNS plugin via pip, trying pacman..."
-              pacman -S --noconfirm --needed python-certbot-dns-cloudflare || echo "DNS plugin installation failed, SSL will use self-signed only"
-            }
-            
-            # Configure system optimizations
-            echo "⚙️ Configuring system optimizations..."
-            echo 'vm.overcommit_memory = 1' >> /etc/sysctl.conf
-            sysctl vm.overcommit_memory=1
-            
-            # Verify memory overcommit setting
-            echo "🔍 Verifying memory overcommit configuration..."
-            OVERCOMMIT_VALUE=$(sysctl -n vm.overcommit_memory)
-            echo "   Current vm.overcommit_memory value: $OVERCOMMIT_VALUE"
-            if [ "$OVERCOMMIT_VALUE" = "1" ]; then
-              echo "✅ Memory overcommit properly configured for Redis"
-            else
-              echo "⚠️ Memory overcommit not set correctly, Redis may show warnings"
-            fi
-            
-            # Set timezone to EST (Toronto, Canada)
-            echo "🕐 Setting timezone to America/Toronto (EST)..."
-            timedatectl set-timezone America/Toronto
-            echo "✅ Timezone set to: $(timedatectl show --property=Timezone --value)"
-            
-            # Verify docker installation and enable service immediately
-            if systemctl list-unit-files | grep -q docker.service; then
-              echo "✅ Docker service found, enabling..."
-              systemctl enable docker
-            else
-              echo "❌ Docker service not found after installation"
-              pacman -S --noconfirm docker
-              systemctl enable docker
-            fi
-            
-            # Verify docker-compose installation
-            if ! command -v docker-compose >/dev/null 2>&1; then
-              echo "Installing docker-compose via pacman..."
-              pacman -S --noconfirm --needed docker-compose || {
-                echo "Installing docker-compose via pip as fallback..."
-                pacman -S --noconfirm python-pip
-                pip install docker-compose --break-system-packages || echo "docker-compose installation failed"
+            ./scripts/dns/cloudflare-updater.sh update-service \
+              --service "$subdomain" \
+              --ip "${TAILSCALE_IP:-}" \
+              --domain "7gram.xyz" \
+              --token "${CLOUDFLARE_API_TOKEN:-}" \
+              --zone-id "${CLOUDFLARE_ZONE_ID:-}" || {
+                echo "⚠️ Failed to update $subdomain.7gram.xyz - continuing with others"
               }
-            fi
             
-            # Enable essential services
-            systemctl enable docker
-            systemctl enable tailscaled
-            systemctl enable netdata
-            
-            # Create stage 2 deployment script
-            cat > /opt/ats-stage2-deploy.sh << 'STAGE2_SCRIPT'
-          #!/bin/bash
-          echo "🚀 Stage 2: Post-reboot deployment with Tailscale..."
-          
-          # Start Tailscale and authenticate
-          systemctl start tailscaled
-          sleep 5
-          
-          # Authenticate with Tailscale (using authkey from environment)
-          if [ -n "\$TAILSCALE_AUTH_KEY" ]; then
-            tailscale up --authkey="\$TAILSCALE_AUTH_KEY" --accept-routes --hostname=ats
-            echo "✅ Tailscale authentication completed with hostname 'ats'"
-          else
-            echo "⚠️ No Tailscale authkey provided, skipping Tailscale setup"
-          fi
-          
-          # Set hostname to match domain
-          hostnamectl set-hostname ats
-          echo "127.0.0.1 ats ats.7gram.xyz" >> /etc/hosts
-          echo "✅ Hostname set to 'ats'"
-          
-          # Verify timezone setting
-          echo "🕐 Verifying timezone configuration..."
-          echo "   Current timezone: $(timedatectl show --property=Timezone --value)"
-          echo "   Current time: $(date)"
-          
-          # Start Docker
-          systemctl start docker
-          systemctl enable docker
-          
-          # Wait for Docker to be ready with error handling
-          DOCKER_READY=false
-          for i in {1..30}; do
-            if docker info >/dev/null 2>&1; then
-              echo "✅ Docker daemon is ready"
-              DOCKER_READY=true
-              break
-            fi
-            echo "⏳ Waiting for Docker daemon... (attempt \$i/30)"
-            
-            # Try to restart Docker if it's taking too long
-            if [ \$i -eq 15 ]; then
-              echo "🔄 Restarting Docker service..."
-              systemctl restart docker
-              sleep 5
-            fi
-            
-            sleep 3
+            # Small delay between updates to avoid rate limiting
+            sleep 2
           done
           
-          if [ "\$DOCKER_READY" != "true" ]; then
-            echo "❌ Docker failed to start in Stage 2"
-            systemctl status docker --no-pager || echo "Docker service status unavailable"
-            journalctl -u docker --no-pager -n 10 || echo "Docker logs unavailable"
-          else
-            echo "✅ Docker successfully started in Stage 2"
-          fi
-          
-          # Verify docker-compose is available
-          if ! command -v docker-compose >/dev/null 2>&1; then
-            echo "Installing docker-compose..."
-            pacman -S --noconfirm docker-compose || pip install docker-compose
-          fi
-          echo "✅ Docker and docker-compose ready"
-          
-          # Start and configure Netdata with cloud integration
-          echo "📊 Starting Netdata monitoring..."
-          systemctl start netdata
-          
-          # Retry cloud claiming if not done in Stage 1
-          if [[ -n "\$NETDATA_CLAIM_TOKEN" && -n "\$NETDATA_CLAIM_ROOM" ]]; then
-            echo "🔗 Attempting Netdata cloud claim..."
-            if command -v netdata-claim.sh >/dev/null 2>&1; then
-              netdata-claim.sh -token="\$NETDATA_CLAIM_TOKEN" -rooms="\$NETDATA_CLAIM_ROOM" -url="https://app.netdata.cloud" || echo "⚠️ Netdata cloud claim failed, check tokens"
-            elif [[ -f /usr/libexec/netdata/netdata-claim.sh ]]; then
-              /usr/libexec/netdata/netdata-claim.sh -token="\$NETDATA_CLAIM_TOKEN" -rooms="\$NETDATA_CLAIM_ROOM" -url="https://app.netdata.cloud" || echo "⚠️ Netdata cloud claim failed, check tokens"
-            else
-              echo "⚠️ Netdata claim script not found"
-            fi
-            
-            # Restart Netdata after claiming
-            systemctl restart netdata
-            sleep 5
-          fi
-          
-          echo "✅ Netdata monitoring started on port 19999"
-          echo "🌐 Netdata will be available at: http://\$(hostname -I 2>/dev/null | awk '{print \$1}' || ip route get 1 | awk '{print \$7; exit}'):19999"
-          
-          if [[ -n "\$NETDATA_CLAIM_TOKEN" ]]; then
-            echo "☁️ Netdata cloud integration configured - check https://app.netdata.cloud"
-          fi
-          
-          # Configure firewall for Arch Linux
-          if command -v ufw >/dev/null 2>&1; then
-            ufw allow ssh
-            ufw allow http
-            ufw allow https
-            ufw allow 19999
-            ufw --force enable
-          else
-            # Configure iptables for Arch
-            iptables -A INPUT -i lo -j ACCEPT
-            iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-            iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-            iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-            iptables -A INPUT -p tcp --dport 443 -j ACCEPT
-            iptables -A INPUT -p tcp --dport 3001 -j ACCEPT
-            iptables -A INPUT -p tcp --dport 19999 -j ACCEPT
-            iptables -A INPUT -j DROP
-            
-            # Save iptables rules
-            mkdir -p /etc/iptables
-            iptables-save > /etc/iptables/iptables.rules
-            systemctl enable iptables
-          fi
-          
-          # Create deployment directory
-          mkdir -p /opt/ats
-          
-          echo "✅ Stage 2 setup completed - ready for deployment"
-          
-          # Signal completion
-          touch /opt/stage2-complete
-          STAGE2_SCRIPT
-            
-            chmod +x /opt/ats-stage2-deploy.sh
-            
-            # Create systemd service for stage 2
-            cat > /etc/systemd/system/ats-stage2.service << 'SERVICE_FILE'
-          [Unit]
-          Description=ATS Stage 2 Deployment
-          After=network.target
-          Wants=network.target
-          
-          [Service]
-          Type=oneshot
-          Environment=TAILSCALE_AUTH_KEY=\$TAILSCALE_AUTH_KEY
-          Environment=NETDATA_CLAIM_TOKEN=\$NETDATA_CLAIM_TOKEN
-          Environment=NETDATA_CLAIM_ROOM=\$NETDATA_CLAIM_ROOM
-          ExecStart=/opt/ats-stage2-deploy.sh
-          RemainAfterExit=yes
-          StandardOutput=journal
-          StandardError=journal
-          
-          [Install]
-          WantedBy=multi-user.target
-          SERVICE_FILE
-            
-            # Enable stage 2 service
-            systemctl enable ats-stage2.service
-            
-            echo "✅ Stage 1 complete - systemd service created for stage 2"
-            echo "🔄 Preparing for reboot..."
-          EOF
-          
-          # Set Tailscale authkey in the service environment
-          if [[ -n "$TAILSCALE_AUTH_KEY" ]]; then
-            sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-              "if [ -f /etc/systemd/system/ats-stage2.service ]; then sed -i 's/\\\\$TAILSCALE_AUTH_KEY/$TAILSCALE_AUTH_KEY/' /etc/systemd/system/ats-stage2.service; else echo 'Service file not found for Tailscale authkey update'; fi"
-          fi
-          
-          # Set Netdata environment variables in the service
-          if [[ -n "$NETDATA_CLAIM_TOKEN" ]]; then
-            sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-              "if [ -f /etc/systemd/system/ats-stage2.service ]; then sed -i 's/\\\\$NETDATA_CLAIM_TOKEN/$NETDATA_CLAIM_TOKEN/' /etc/systemd/system/ats-stage2.service; else echo 'Service file not found for Netdata token update'; fi"
-          fi
-          
-          if [[ -n "$NETDATA_CLAIM_ROOM" ]]; then
-            sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-              "if [ -f /etc/systemd/system/ats-stage2.service ]; then sed -i 's/\\\\$NETDATA_CLAIM_ROOM/$NETDATA_CLAIM_ROOM/' /etc/systemd/system/ats-stage2.service; else echo 'Service file not found for Netdata rooms update'; fi"
-          fi
-          
-          # Reload systemd and reboot
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP \
-            "systemctl daemon-reload && reboot" || true
-          
-          echo "🔄 Server rebooting for stage 2..."
+          echo "✅ All ATS DNS records update completed!"
+          echo "🌐 The following domains now point to ${TAILSCALE_IP:-'the new server IP'}:"
+          echo "   • ats.7gram.xyz"
+          echo "   • www.ats.7gram.xyz"
+          echo "   • api.ats.7gram.xyz"
+          echo "   • game.ats.7gram.xyz"
+          echo "   • server.ats.7gram.xyz"
 
-      - name: ⏳ Wait for Stage 2 Completion
-        env:
-          SERVER_IP: ${{ steps.create.outputs.ip }}
-          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-        run: |
-          echo "⏳ Waiting for server reboot and stage 2 completion..."
-          
-          # Wait for reboot
-          sleep 60
-          
-          # Wait for SSH to come back up and stage 2 to complete
-          for i in {1..20}; do
-            if sshpass -p "$ATS_ROOT_PASSWORD" ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$SERVER_IP "test -f /opt/stage2-complete"; then
-              echo "✅ Stage 2 deployment completed successfully"
-              break
-            fi
-            echo "⏳ Waiting for stage 2 completion... (attempt $i/20)"
-            sleep 30
-          done
-          
-          # Verify services are running
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP << 'EOF'
-            echo "🔍 Verifying services..."
-            systemctl status docker --no-pager
-            
-            if systemctl list-unit-files | grep -q tailscaled.service; then
-              systemctl status tailscaled --no-pager
-              # Check Tailscale status
-              if command -v tailscale >/dev/null 2>&1; then
-                tailscale status || echo "⚠️ Tailscale not connected"
-              else
-                echo "⚠️ Tailscale command not found"
-              fi
-            else
-              echo "⚠️ Tailscale service not installed"
-            fi
-            
-            if systemctl list-unit-files | grep -q netdata.service; then
-              systemctl status netdata --no-pager
-            else
-              echo "⚠️ Netdata service not installed"
-            fi
-            
-            echo "✅ Two-stage deployment completed"
-            echo "📊 Netdata monitoring available at: http://$(hostname -I 2>/dev/null | awk '{print $1}' || ip route get 1 | awk '{print $7; exit}'):19999"
-          EOF
-
-  # ============================================================================
-  # Build and Push Docker Images to DockerHub
-  # ============================================================================
-  build-docker-images:
-    name: 🐳 Build & Push Docker Images
-    runs-on: ubuntu-latest
-    needs: detect-changes
-    if: |
-      (contains(fromJson('["docker-only", "full-deploy", "web-only"]'), github.event.inputs.deployment_mode || 'docker-only') &&
-       (needs.detect-changes.outputs.docker-changed == 'true' || 
-        needs.detect-changes.outputs.web-changed == 'true' || 
-        needs.detect-changes.outputs.api-changed == 'true' ||
-        github.event_name == 'workflow_dispatch'))
-    outputs:
-      web-image: ${{ steps.meta.outputs.web-image }}
-      api-image: ${{ steps.meta.outputs.api-image }}
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🐳 Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: 🔐 Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-
-      - name: 🏷️ Generate image tags
-        id: meta
-        run: |
-          # Generate version tag
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
-            VERSION="latest"
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            VERSION="${{ github.ref_name }}"
-          else
-            VERSION="pr-${{ github.event.number }}"
-          fi
-          
-          WEB_IMAGE="${{ env.DOCKER_REPO }}:web-${VERSION}"
-          API_IMAGE="${{ env.DOCKER_REPO }}:api-${VERSION}"
-          
-          echo "web-image=${WEB_IMAGE}" >> $GITHUB_OUTPUT
-          echo "api-image=${API_IMAGE}" >> $GITHUB_OUTPUT
-          
-          echo "🏷️ Will build:"
-          echo "  Web: ${WEB_IMAGE}"
-          echo "  API: ${API_IMAGE}"
-
-      - name: 🏗️ Build and Push React Web App
-        if: needs.detect-changes.outputs.web-changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v5
-        with:
-          context: ./src/web
-          file: ./src/web/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.web-image }}
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            VITE_API_URL=http://localhost/api
-            VITE_SOCKET_URL=http://localhost
-
-      - name: 🏗️ Build and Push API Server
-        if: needs.detect-changes.outputs.api-changed == 'true' || github.event_name == 'workflow_dispatch'
-        uses: docker/build-push-action@v5
-        with:
-          context: ./src/api
-          file: ./src/api/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.api-image }}
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ============================================================================
-  # Deploy to Server
-  # ============================================================================
-  deploy-to-server:
-    name: 🚀 Deploy to ATS Server
-    runs-on: ubuntu-latest
-    needs: [infrastructure-check, build-docker-images, create-server, detect-changes]
-    if: |
-      always() && 
-      (needs.infrastructure-check.outputs.server-exists == 'true' || needs.create-server.result == 'success') &&
-      contains(fromJson('["docker-only", "full-deploy", "web-only"]'), github.event.inputs.deployment_mode || 'docker-only') &&
-      (needs.build-docker-images.result == 'success' || needs.build-docker-images.result == 'skipped')
-    steps:
-      - name: 📥 Checkout repository
-        uses: actions/checkout@v4
-
-      - name: 🎯 Determine Target Server
-        id: target
-        run: |
-          if [[ "${{ needs.infrastructure-check.outputs.server-exists }}" == "true" ]]; then
-            SERVER_IP="${{ needs.infrastructure-check.outputs.server-ip }}"
-            echo "Using existing server: $SERVER_IP"
-          elif [[ "${{ needs.create-server.result }}" == "success" ]]; then
-            SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
-            echo "Using new server: $SERVER_IP"
-          else
-            echo "❌ No server available for deployment"
-            exit 1
-          fi
-          echo "server-ip=$SERVER_IP" >> $GITHUB_OUTPUT
-
-      - name: � Verify Server Readiness
-        env:
-          SERVER_IP: ${{ steps.target.outputs.server-ip }}
-          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-        run: |
-          echo "🔍 Verifying server readiness before deployment..."
-          
-          # Check if Stage 2 completed (for new servers)
-          if [[ "${{ needs.create-server.result }}" == "success" ]]; then
-            echo "📋 Checking Stage 2 completion status..."
-            STAGE2_STATUS=$(sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
-              if [ -f /opt/stage2-complete ]; then
-                echo 'completed'
-              else
-                echo 'incomplete'
-              fi
-            ")
-            
-            if [[ "$STAGE2_STATUS" == "completed" ]]; then
-              echo "✅ Stage 2 completed successfully"
-            else
-              echo "⚠️ Stage 2 may not have completed properly"
-              echo "📊 Checking system status:"
-              
-              sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
-                echo 'System uptime:'
-                uptime
-                echo 'Available services:'
-                systemctl list-units --type=service --state=active | grep -E 'docker|tailscale|netdata' || echo 'No matching services found'
-                echo 'Docker status:'
-                systemctl status docker --no-pager || echo 'Docker service not found'
-              "
-            fi
-          fi
-          
-          # Verify basic connectivity and system status
-          echo "🌐 Checking server connectivity and basic status..."
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
-            echo 'Hostname: \$(hostname)'
-            echo 'System: \$(uname -a)'
-            echo 'Available disk space:'
-            df -h /
-            echo 'Memory usage:'
-            free -h
-            echo 'Network interfaces:'
-            ip addr show | grep -E 'inet [0-9]' | grep -v '127.0.0.1' | awk '{print \$2}' | head -3
-          "
-
-      - name: �📦 Deploy Docker Stack
-        env:
-          SERVER_IP: ${{ steps.target.outputs.server-ip }}
-          WEB_IMAGE: ${{ needs.build-docker-images.outputs.web-image }}
-          API_IMAGE: ${{ needs.build-docker-images.outputs.api-image }}
-          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-        run: |
-          echo "🚀 Deploying to server: $SERVER_IP"
-          echo "🐳 Using images:"
-          echo "   Web: ${WEB_IMAGE:-nuniesmith/ats:web-latest}"
-          echo "   API: ${API_IMAGE:-nuniesmith/ats:api-latest}"
-          
-          # Create deployment directory and subdirectories
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "mkdir -p /opt/ats/config /opt/ats/scripts"
-          
-          # Copy deployment files and scripts
-          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no docker-compose.prod.yml root@$SERVER_IP:/opt/ats/docker-compose.yml
-          
-          # Copy nginx configurations
-          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx.conf root@$SERVER_IP:/opt/ats/config/nginx.conf
-          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx-with-ssl.conf root@$SERVER_IP:/opt/ats/config/nginx-with-ssl.conf
-          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/nginx-http-only.conf root@$SERVER_IP:/opt/ats/config/nginx-http-only.conf
-          
-          # Copy SSL management scripts and services
-          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no scripts/ssl-manager.sh root@$SERVER_IP:/opt/ats/scripts/ssl-manager.sh
-          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/ats-ssl-manager.service root@$SERVER_IP:/etc/systemd/system/ats-ssl-manager.service
-          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/ats-ssl-renewal.service root@$SERVER_IP:/etc/systemd/system/ats-ssl-renewal.service
-          sshpass -p "$ATS_ROOT_PASSWORD" scp -o StrictHostKeyChecking=no config/ats-ssl-renewal.timer root@$SERVER_IP:/etc/systemd/system/ats-ssl-renewal.timer
-          
-          # Create environment file
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "cat > /opt/ats/.env << 'EOF'
-          NODE_ENV=production
-          TZ=America/Toronto
-          JWT_SECRET=${{ secrets.JWT_SECRET }}
-          DOMAIN_NAME=${{ env.DOMAIN_NAME }}
-          ATS_DEFAULT_PASSWORD=${{ secrets.ATS_DEFAULT_PASSWORD }}
-          STEAM_COLLECTION_ID=3530633316
-          WEB_IMAGE=${WEB_IMAGE:-nuniesmith/ats:web-latest}
-          API_IMAGE=${API_IMAGE:-nuniesmith/ats:api-latest}
-          CLOUDFLARE_API_TOKEN=${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID=${{ secrets.CLOUDFLARE_ZONE_ID }}
-          DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
-          EOF"
-          
-          # Deploy the stack
-          sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
-            cd /opt/ats
-            
-            # Ensure Docker is properly installed and configured
-            echo '🔧 Checking Docker installation...'
-            if ! command -v docker >/dev/null 2>&1; then
-              echo 'Docker not found, installing...'
-              pacman -Syu --noconfirm
-              pacman -S --noconfirm docker docker-compose
-            fi
-            
-            # Ensure Docker daemon is running
-            echo 'Starting Docker daemon...'
-            systemctl start docker
-            systemctl enable docker
-            
-            # Wait for Docker daemon to be ready with better error handling
-            DOCKER_READY=false
-            for i in {1..30}; do
-              if docker info >/dev/null 2>&1; then
-                echo 'Docker daemon is ready'
-                DOCKER_READY=true
-                break
-              fi
-              echo \"Waiting for Docker daemon... (attempt \$i/30)\"
-              
-              # Try to restart Docker service if it's not responding
-              if [ \$i -eq 10 ] || [ \$i -eq 20 ]; then
-                echo 'Restarting Docker service...'
-                systemctl stop docker 2>/dev/null || true
-                sleep 2
-                systemctl start docker
-                sleep 5
-              fi
-              
-              sleep 3
-            done
-            
-            if [ \"\$DOCKER_READY\" != \"true\" ]; then
-              echo '❌ Docker daemon failed to start after 30 attempts'
-              echo 'Checking Docker service status:'
-              systemctl status docker --no-pager || true
-              echo 'Checking Docker logs:'
-              journalctl -u docker --no-pager -n 20 || true
-              exit 1
-            fi
-            
-            # Check if docker-compose is available, install if not
-            if ! command -v docker-compose >/dev/null 2>&1; then
-              echo 'Installing docker-compose...'
-              pacman -S --noconfirm docker-compose || pip install docker-compose
-            fi
-            
-            # Verify Docker is working
-            echo '🔍 Verifying Docker installation:'
-            docker version
-            docker-compose version
-            
-            # Verify system configuration for Redis
-            echo '🔍 Verifying system configuration for Redis:'
-            echo \"   Memory overcommit: \$(sysctl -n vm.overcommit_memory)\"
-            echo \"   Available memory: \$(free -h | grep Mem | awk '{print \$2}')\"
-            echo \"   Swap status: \$(free -h | grep Swap | awk '{print \$2}')\"
-            
-            # Set up SSL certificates before starting containers
-            echo '🔒 Setting up SSL certificates...'
-            chmod +x scripts/ssl-manager.sh
-            
-            # Create Cloudflare credentials if token is provided
-            if [[ -n '$CLOUDFLARE_API_TOKEN' ]]; then
-              mkdir -p /root/.secrets
-              cat > /root/.secrets/cloudflare.ini << 'CFEOF'
-          dns_cloudflare_api_token = $CLOUDFLARE_API_TOKEN
-          CFEOF
-              chmod 600 /root/.secrets/cloudflare.ini
-              echo '✅ Cloudflare credentials configured'
-            fi
-            
-            # Backup original SSL nginx config and start with HTTP-only
-            echo '🔧 Setting up initial HTTP-only nginx configuration...'
-            cp config/nginx.conf config/nginx-ssl.conf.backup
-            cp config/nginx-http-only.conf config/nginx.conf
-            
-            # Pull and start containers with HTTP-only config
-            echo 'Pulling Docker images...'
-            docker-compose pull
-            
-            echo 'Starting containers (HTTP-only initially)...'
-            docker-compose up -d
-            
-            # Wait for containers to be ready
-            echo 'Waiting for containers to start...'
-            sleep 10
-            
-            # Run SSL manager to set up certificates
-            echo '🔒 Setting up SSL certificates...'
-            ./scripts/ssl-manager.sh auto
-            
-            # Now switch to SSL configuration and restart nginx
-            echo '🔄 Switching to SSL configuration...'
-            if [[ -f /etc/letsencrypt/live/ats.7gram.xyz/fullchain.pem ]]; then
-              echo '✅ SSL certificates found, enabling HTTPS'
-              cp config/nginx-ssl.conf.backup config/nginx.conf
-              docker-compose restart nginx
-            else
-              echo '⚠️ No SSL certificates, staying with HTTP-only'
-            fi
-            
-            # Enable SSL management services
-            echo '⚙️ Setting up SSL management services...'
-            systemctl daemon-reload
-            systemctl enable ats-ssl-manager.service
-            systemctl enable ats-ssl-renewal.timer
-            systemctl start ats-ssl-renewal.timer
-            
-            # Show container status
-            echo '📊 Container status:'
-            docker-compose ps
-            
-            echo '📝 Recent container logs:'
-            docker-compose logs --tail=20
-            
-            # Test Redis functionality
-            echo '🔍 Testing Redis functionality...'
-            if docker exec ats-redis redis-cli ping >/dev/null 2>&1; then
-              echo '✅ Redis is responding to ping'
-              echo '📊 Redis info:'
-              docker exec ats-redis redis-cli info server | grep redis_version || echo 'Could not get Redis version'
-              echo '🔍 Checking Redis logs for memory overcommit warnings...'
-              REDIS_LOGS=$(docker logs ats-redis 2>&1 | grep -i "memory overcommit" | tail -3 || echo "No memory overcommit warnings found")
-              echo "   Redis memory overcommit status: $REDIS_LOGS"
-            else
-              echo '⚠️ Redis is not responding to ping'
-              docker logs ats-redis --tail=10
-            fi
-            
-            # Test container connectivity
-            echo '🔗 Testing container network connectivity...'
-            if docker exec ats-web-app nslookup ats-api-server >/dev/null 2>&1; then
-              echo '✅ Web app can resolve API server'
-            else
-              echo '⚠️ Web app cannot resolve API server - checking network'
-              docker network ls
-              docker network inspect ats-network || docker network inspect ats_ats-network
-            fi
-            
-            # Wait for health checks
-            echo 'Waiting for services to be healthy...'
-            for i in {1..6}; do
-              if curl -f http://localhost/nginx-health >/dev/null 2>&1; then
-                echo 'HTTP health check passed'
-                break
-              fi
-              echo \"Waiting for HTTP access... (attempt \$i/6)\"
-              sleep 5
-            done
-            
-            for i in {1..6}; do
-              if curl -k -f https://localhost/nginx-health >/dev/null 2>&1; then
-                echo 'HTTPS health check passed'
-                break
-              fi
-              echo \"Waiting for HTTPS access... (attempt \$i/6)\"
-              sleep 5
-            done
-          "
-
-      - name: 🔗 Verify Tailscale Connection
-        env:
-          SERVER_IP: ${{ steps.target.outputs.server-ip }}
-          ATS_ROOT_PASSWORD: ${{ secrets.ATS_ROOT_PASSWORD }}
-        run: |
-          echo "🔗 Verifying Tailscale connection..."
-          
-          # Check Tailscale status and get internal IP
-          TAILSCALE_STATUS=$(sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "tailscale status --json 2>/dev/null || echo '{}'")
-          
-          if echo "$TAILSCALE_STATUS" | jq -e '.Self.Online' >/dev/null 2>&1; then
-            TAILSCALE_IP=$(echo "$TAILSCALE_STATUS" | jq -r '.Self.TailscaleIPs[0] // "unknown"')
-            echo "✅ Tailscale connected successfully"
-            echo "   Public IP: $SERVER_IP"
-            echo "   Tailscale IP: $TAILSCALE_IP"
-            echo "   Hostname: ats"
-            echo "tailscale_ip=$TAILSCALE_IP" >> $GITHUB_ENV
-            echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
-          else
-            echo "⚠️ Tailscale not connected or authentication failed"
-            echo "Attempting manual Tailscale authentication..."
-            
-            # Retry Tailscale authentication if failed
-            if [[ -n "${{ secrets.TAILSCALE_AUTH_KEY }}" ]]; then
-              sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "
-                systemctl restart tailscaled
-                sleep 10
-                tailscale up --authkey='${{ secrets.TAILSCALE_AUTH_KEY }}' --accept-routes --hostname=ats --force-reauth
-                sleep 5
-                tailscale status
-              "
-              
-              # Re-check Tailscale status after retry
-              echo "🔄 Re-checking Tailscale status after retry..."
-              TAILSCALE_STATUS_RETRY=$(sshpass -p "$ATS_ROOT_PASSWORD" ssh -o StrictHostKeyChecking=no root@$SERVER_IP "tailscale status --json 2>/dev/null || echo '{}'")
-              
-              if echo "$TAILSCALE_STATUS_RETRY" | jq -e '.Self.Online' >/dev/null 2>&1; then
-                TAILSCALE_IP=$(echo "$TAILSCALE_STATUS_RETRY" | jq -r '.Self.TailscaleIPs[0] // "unknown"')
-                echo "✅ Tailscale authentication successful after retry"
-                echo "   Tailscale IP: $TAILSCALE_IP"
-                echo "tailscale_ip=$TAILSCALE_IP" >> $GITHUB_ENV
-                echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
-              else
-                echo "❌ Tailscale authentication failed after retry"
-                echo "TAILSCALE_IP=" >> $GITHUB_ENV
-              fi
-            else
-              echo "❌ No Tailscale auth key provided"
-              echo "TAILSCALE_IP=" >> $GITHUB_ENV
-            fi
-          fi
-
-      - name: 🌐 Update Cloudflare DNS Records
-        env:
-          SERVER_IP: ${{ steps.target.outputs.server-ip }}
-          TAILSCALE_IP: ${{ env.TAILSCALE_IP }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          DOMAIN_NAME: ${{ env.DOMAIN_NAME }}
-        run: |
-          if [[ -n "$CLOUDFLARE_API_TOKEN" && -n "$CLOUDFLARE_ZONE_ID" && -n "$DOMAIN_NAME" ]]; then
-            echo "🌐 Updating Cloudflare DNS records for $DOMAIN_NAME..."
-            
-            # Determine which IP to use for DNS records
-            if [[ -n "$TAILSCALE_IP" && "$TAILSCALE_IP" != "unknown" && "$TAILSCALE_IP" != "" ]]; then
-              DNS_IP="$TAILSCALE_IP"
-              echo "🔗 Using Tailscale IP for DNS records: $DNS_IP"
-            else
-              DNS_IP="$SERVER_IP"
-              echo "⚠️ Tailscale IP not available, falling back to public IP: $DNS_IP"
-            fi
-            
-            # Function to update DNS record
-            update_dns_record() {
-              local record_name="$1"
-              local record_ip="$2"
-              local record_type="${3:-A}"
-              
-              echo "🔄 Updating $record_type record: $record_name -> $record_ip"
-              
-              # Get existing record ID
-              RECORD_RESPONSE=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records?name=$record_name&type=$record_type" \
-                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                -H "Content-Type: application/json")
-              
-              RECORD_ID=$(echo "$RECORD_RESPONSE" | jq -r '.result[0].id // "null"')
-              
-              if [[ "$RECORD_ID" != "null" && "$RECORD_ID" != "" ]]; then
-                # Update existing record
-                UPDATE_RESPONSE=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records/$RECORD_ID" \
-                  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                  -H "Content-Type: application/json" \
-                  --data "{\"type\":\"$record_type\",\"name\":\"$record_name\",\"content\":\"$record_ip\",\"ttl\":1}")
-                
-                if echo "$UPDATE_RESPONSE" | jq -e '.success' >/dev/null; then
-                  echo "✅ Updated $record_name ($record_type) -> $record_ip"
-                else
-                  echo "❌ Failed to update $record_name: $(echo "$UPDATE_RESPONSE" | jq -r '.errors[0].message // "Unknown error"')"
-                fi
-              else
-                # Create new record
-                CREATE_RESPONSE=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
-                  -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-                  -H "Content-Type: application/json" \
-                  --data "{\"type\":\"$record_type\",\"name\":\"$record_name\",\"content\":\"$record_ip\",\"ttl\":1}")
-                
-                if echo "$CREATE_RESPONSE" | jq -e '.success' >/dev/null; then
-                  echo "✅ Created $record_name ($record_type) -> $record_ip"
-                else
-                  echo "❌ Failed to create $record_name: $(echo "$CREATE_RESPONSE" | jq -r '.errors[0].message // "Unknown error"')"
-                fi
-              fi
-            }
-            
-            # Update main domain A record with Tailscale IP
-            update_dns_record "$DOMAIN_NAME" "$DNS_IP" "A"
-            
-            # Update www subdomain with Tailscale IP
-            update_dns_record "www.$DOMAIN_NAME" "$DNS_IP" "A"
-            
-            # Update API subdomain with Tailscale IP
-            update_dns_record "api.$DOMAIN_NAME" "$DNS_IP" "A"
-            
-            echo "🌐 DNS update completed"
-            if [[ "$DNS_IP" == "$TAILSCALE_IP" ]]; then
-              echo "   🔗 All DNS records updated with Tailscale IP: $DNS_IP"
-              echo "   Main domain: https://$DOMAIN_NAME (Tailscale)"
-              echo "   WWW: https://www.$DOMAIN_NAME (Tailscale)"
-              echo "   API: https://api.$DOMAIN_NAME (Tailscale)"
-              echo ""
-              echo "   ℹ️ Note: These domains will only resolve within your Tailscale network"
-              echo "   🌍 Public access still available at: http://$SERVER_IP"
-            else
-              echo "   🌍 DNS records updated with public IP: $DNS_IP"
-              echo "   Main domain: https://$DOMAIN_NAME"
-              echo "   WWW: https://www.$DOMAIN_NAME"
-              echo "   API: https://api.$DOMAIN_NAME"
-            fi
-            
-            # Wait for DNS propagation
-            echo "⏳ Waiting 30 seconds for DNS propagation..."
-            sleep 30
-            
-          else
-            echo "ℹ️ Cloudflare credentials not configured, skipping DNS update"
-            echo "  CLOUDFLARE_API_TOKEN: $([[ -n "$CLOUDFLARE_API_TOKEN" ]] && echo "✅ Set" || echo "❌ Missing")"
-            echo "  CLOUDFLARE_ZONE_ID: $([[ -n "$CLOUDFLARE_ZONE_ID" ]] && echo "✅ Set" || echo "❌ Missing")"
-            echo "  DOMAIN_NAME: $([[ -n "$DOMAIN_NAME" ]] && echo "✅ Set ($DOMAIN_NAME)" || echo "❌ Missing")"
-          fi
-
-  # ============================================================================
-  # Deployment Summary & Notifications
-  # ============================================================================
+  # Post-deployment summary
   deployment-summary:
-    name: 📋 Deployment Summary
+    name: 📊 ATS Deployment Summary
     runs-on: ubuntu-latest
-    needs: [infrastructure-check, build-docker-images, deploy-to-server, create-server, detect-changes]
+    needs: [deploy-ats, dns-update-ats]
     if: always()
+    
     steps:
-      - name: 📋 Generate Summary
-        run: |
-          echo "# 🚀 ATS Server Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 Deployment Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Server status
-          if [[ "${{ needs.create-server.result }}" == "success" ]]; then
-            echo "✅ **New Server Created**: ${{ needs.create-server.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.infrastructure-check.outputs.server-exists }}" == "true" ]]; then
-            echo "✅ **Using Existing Server**: ${{ needs.infrastructure-check.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.create-server.result }}" == "skipped" ]]; then
-            echo "⚠️ **Server Creation Skipped**: No server exists and create_new_server=false" >> $GITHUB_STEP_SUMMARY
-            echo "   - To deploy, set create_new_server=true in workflow inputs" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.infrastructure-check.result }}" == "failure" ]]; then
-            echo "❌ **Infrastructure Check Failed**: Could not check for existing servers" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Build status
-          if [[ "${{ needs.build-docker-images.result }}" == "success" ]]; then
-            echo "✅ **Docker Images Built and Pushed**" >> $GITHUB_STEP_SUMMARY
-            echo "   - Web: ${{ needs.build-docker-images.outputs.web-image }}" >> $GITHUB_STEP_SUMMARY
-            echo "   - API: ${{ needs.build-docker-images.outputs.api-image }}" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.build-docker-images.result }}" == "skipped" ]]; then
-            echo "⚠️ **Docker Build Skipped**: No code changes detected" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          # Deployment status
-          if [[ "${{ needs.deploy-to-server.result }}" == "success" ]]; then
-            echo "✅ **Deployment Successful**" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 🌐 Access Points" >> $GITHUB_STEP_SUMMARY
-            echo "- **Web Interface**: http://${{ env.DOMAIN_NAME }} (Tailscale network)" >> $GITHUB_STEP_SUMMARY
-            echo "- **API Server**: http://${{ env.DOMAIN_NAME }}:3001 (Tailscale network)" >> $GITHUB_STEP_SUMMARY
-            echo "- **Direct Public Access**: http://${{ needs.infrastructure-check.outputs.server-ip || needs.create-server.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **Netdata Monitoring**: http://${{ needs.infrastructure-check.outputs.server-ip || needs.create-server.outputs.server-ip }}:19999" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## 🔗 Network Information" >> $GITHUB_STEP_SUMMARY
-            echo "- **Public IP**: ${{ needs.infrastructure-check.outputs.server-ip || needs.create-server.outputs.server-ip }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **Tailscale IP**: Used for DNS records (private network)" >> $GITHUB_STEP_SUMMARY
-            echo "- **Hostname**: ats" >> $GITHUB_STEP_SUMMARY
-            echo "- **DNS**: Updated for ${{ env.DOMAIN_NAME }} (points to Tailscale IP)" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "## ℹ️ **Important Notes**" >> $GITHUB_STEP_SUMMARY
-            echo "- Domain names resolve to Tailscale IP (private network only)" >> $GITHUB_STEP_SUMMARY
-            echo "- Use public IP for access outside Tailscale network" >> $GITHUB_STEP_SUMMARY
-            echo "- Tailscale provides secure private network access" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ needs.deploy-to-server.result }}" == "skipped" ]]; then
-            echo "⚠️ **Deployment Skipped**: No server available" >> $GITHUB_STEP_SUMMARY
-            echo "   - Create a server first by setting create_new_server=true" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: 📢 Discord Notification
-        if: always()
+      - name: 📊 Display ATS Deployment Summary
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          SERVER_IP: ${{ needs.infrastructure-check.outputs.server-ip || needs.create-server.outputs.server-ip }}
+          ATS_SERVER_IP: ${{ needs.deploy-ats.outputs.server_ip }}
+          ATS_SERVER_ID: ${{ needs.deploy-ats.outputs.server_id }}
+          TAILSCALE_IP: ${{ needs.deploy-ats.outputs.tailscale_ip }}
+          DEPLOYMENT_STATUS: ${{ needs.deploy-ats.outputs.deployment_status }}
+          DEPLOY_RESULT: ${{ needs.deploy-ats.result }}
         run: |
-          if [[ -n "$DISCORD_WEBHOOK_URL" ]]; then
-            echo "📢 Sending Discord notification..."
-            
-            # Determine overall status
-            if [[ "${{ needs.deploy-to-server.result }}" == "success" ]]; then
-              STATUS="✅ Success"
-              COLOR=3066993  # Green
-              DESCRIPTION="ATS Server deployment completed successfully!"
-            elif [[ "${{ needs.create-server.result }}" == "success" && "${{ needs.deploy-to-server.result }}" != "success" ]]; then
-              STATUS="⚠️ Partial Success"
-              COLOR=16776960  # Yellow
-              DESCRIPTION="Server created but deployment had issues"
-            else
-              STATUS="❌ Failed"
-              COLOR=15158332  # Red
-              DESCRIPTION="Deployment failed - check logs for details"
-            fi
-            
-            # Create Discord embed
-            EMBED_DATA=$(cat <<EOF
-          {
-            "embeds": [{
-              "title": "🚀 ATS Server Deployment",
-              "description": "$DESCRIPTION",
-              "color": $COLOR,
-              "fields": [
-                {
-                  "name": "🎯 Status",
-                  "value": "$STATUS",
-                  "inline": true
-                },
-                {
-                  "name": "🌐 Domain",
-                  "value": "${{ env.DOMAIN_NAME }}",
-                  "inline": true
-                },
-                {
-                  "name": "📍 Server IP",
-                  "value": "$SERVER_IP",
-                  "inline": true
-                },
-                {
-                  "name": "🔗 Access Points",
-                  "value": "• [Web App](http://${{ env.DOMAIN_NAME }}) (Tailscale)\n• [API](http://${{ env.DOMAIN_NAME }}:3001) (Tailscale)\n• [Public Access](http://$SERVER_IP)\n• [Monitoring](http://$SERVER_IP:19999)",
-                  "inline": false
-                },
-                {
-                  "name": "📊 Deployment Info",
-                  "value": "• Commit: \`${{ github.sha }}\`\n• Branch: \`${{ github.ref_name }}\`\n• Triggered by: ${{ github.event_name }}",
-                  "inline": false
-                }
-              ],
-              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
-              "footer": {
-                "text": "ATS Deployment Pipeline"
-              }
-            }]
-          }
-          EOF
-            )
-            
-            # Send to Discord
-            curl -H "Content-Type: application/json" \
-              -d "$EMBED_DATA" \
-              "$DISCORD_WEBHOOK_URL"
-            
-            echo "✅ Discord notification sent"
-          else
-            echo "ℹ️ Discord webhook not configured, skipping notification"
-          fi
-
-  # ============================================================================
-  # Cleanup Failed Deployments
-  # ============================================================================
-  cleanup-failed-deployment:
-    name: 🧹 Cleanup Failed Deployment
-    runs-on: ubuntu-latest
-    needs: [create-server, deploy-to-server]
-    if: |
-      always() && 
-      (needs.create-server.result == 'failure' || 
-       (needs.create-server.result == 'success' && needs.deploy-to-server.result == 'failure'))
-    steps:
-      - name: 🧹 Cleanup Failed Server
-        env:
-          LINODE_CLI_TOKEN: ${{ secrets.LINODE_CLI_TOKEN }}
-        run: |
-          echo "🧹 Cleaning up failed deployment..."
+          echo "🚀 ATS Game Server Deployment Summary"
+          echo "====================================="
+          echo ""
+          echo "📊 **Deployment Results:**"
+          echo "  🎮 ATS Server: ${DEPLOY_RESULT:-'Unknown'}"
+          echo "🎯 **Action:** ${{ inputs.action_type || 'deploy' }}"
+          echo ""
           
-          if [[ -n "$LINODE_CLI_TOKEN" ]]; then
-            # Get the server ID for cleanup
-            if [[ "${{ needs.create-server.result }}" == "success" ]]; then
-              SERVER_IP="${{ needs.create-server.outputs.server-ip }}"
-              echo "🔍 Looking for server with IP: $SERVER_IP"
-              
-              # Find server by IP and delete it
-              SERVERS_RESPONSE=$(curl -s -H "Authorization: Bearer $LINODE_CLI_TOKEN" \
-                "https://api.linode.com/v4/linode/instances")
-              
-              SERVER_ID=$(echo "$SERVERS_RESPONSE" | jq -r ".data[] | select(.ipv4[]? == \"$SERVER_IP\") | .id")
-              
-              if [[ -n "$SERVER_ID" && "$SERVER_ID" != "null" ]]; then
-                echo "🗑️ Deleting failed server (ID: $SERVER_ID, IP: $SERVER_IP)..."
-                
-                DELETE_RESPONSE=$(curl -s -X DELETE \
-                  -H "Authorization: Bearer $LINODE_CLI_TOKEN" \
-                  "https://api.linode.com/v4/linode/instances/$SERVER_ID")
-                
-                if [[ $? -eq 0 ]]; then
-                  echo "✅ Server cleanup completed"
-                  echo "💰 Server costs stopped - no charges for failed deployment"
-                else
-                  echo "❌ Failed to delete server - please manually cleanup server ID: $SERVER_ID"
-                  echo "🔗 Manual cleanup: https://cloud.linode.com/linodes/$SERVER_ID"
-                fi
-              else
-                echo "⚠️ Could not find server to cleanup"
-              fi
-            else
-              echo "ℹ️ No server was created, nothing to cleanup"
-            fi
-          else
-            echo "⚠️ No Linode token available for cleanup"
+          # Add destruction confirmation check
+          if [[ "${{ inputs.action_type }}" == "destroy" && "${{ inputs.confirm_destruction }}" != "DESTROY" ]]; then
+            echo "⚠️ **Destruction Prevented:**"
+            echo "  • To destroy the server, you must type 'DESTROY' in the confirm_destruction field"
+            echo "  • This is a safety measure to prevent accidental destruction"
+            echo ""
           fi
           
-          echo "🔔 Deployment failed - check logs above for details"
+          if [[ "${DEPLOY_RESULT:-}" == "success" ]]; then
+            echo "🎮 **ATS Game Server:**"
+            echo "  • Server ID: ${ATS_SERVER_ID:-'Check workflow logs'}"
+            echo "  • Public IP: ${ATS_SERVER_IP:-'Check workflow logs'}"
+            echo "  • Tailscale IP: ${TAILSCALE_IP:-'Check workflow logs'}"
+            echo "  • Server Type: ${{ inputs.server_type || 'g6-nanode-1' }} (1GB RAM - \$5/month)"
+            echo "  • Operating System: Arch Linux"
+            echo "  • Region: ${{ inputs.target_region || 'ca-central' }}"
+            echo ""
+            echo "🌐 **DNS Configuration:**"
+            echo "  ✅ Multiple DNS records updated automatically"
+            echo "  🔧 Cloudflare integration with Tailscale IP updates"
+            echo "  📋 Updated DNS records pointing to ${TAILSCALE_IP:-'the new server IP'}:"
+            echo "     • ats.7gram.xyz (main domain)"
+            echo "     • www.ats.7gram.xyz (web interface)"
+            echo "     • api.ats.7gram.xyz (API endpoint)"
+            echo "     • game.ats.7gram.xyz (game server)"
+            echo "     • server.ats.7gram.xyz (server management)"
+            echo ""
+            echo "🔗 **Access Methods:**"
+            if [[ -n "${ATS_SERVER_IP:-}" ]]; then
+              echo "  • SSH (public): ssh root@${ATS_SERVER_IP}"
+            fi
+            if [[ -n "${TAILSCALE_IP:-}" ]]; then
+              echo "  • SSH (Tailscale): ssh root@${TAILSCALE_IP}"
+              echo "  • Game Server (Tailscale): ${TAILSCALE_IP}:27015"
+            fi
+            echo "  • Primary Domain: https://ats.7gram.xyz"
+            echo "  • Web Interface: https://www.ats.7gram.xyz"
+            echo "  • API Endpoint: https://api.ats.7gram.xyz"
+            echo "  • Game Server: game.ats.7gram.xyz:27015"
+            echo "  • Server Management: https://server.ats.7gram.xyz"
+            echo ""
+            echo "🔧 **Stage Process Completed:**"
+            echo "  ✅ Stage 0: Preflight validation on GitHub runner"
+            echo "  ✅ Stage 1: Arch Linux setup and Docker installation"
+            echo "  ✅ Stage 2: Tailscale OAuth authentication via systemd"
+            echo "  ✅ DNS: Multiple Cloudflare records updated with Tailscale IP"
+            echo "  ✅ Service: ATS game server deployed and running"
+            echo ""
+            echo "💰 **Infrastructure Cost:**"
+            case "${{ inputs.server_type || 'g6-nanode-1' }}" in
+              "g6-nanode-1")
+                echo "  • Server Cost: \$5/month (1GB RAM - g6-nanode-1)"
+                ;;
+              "g6-standard-1")
+                echo "  • Server Cost: \$12/month (2GB RAM - g6-standard-1)"
+                ;;
+              "g6-standard-2")
+                echo "  • Server Cost: \$24/month (4GB RAM - g6-standard-2)"
+                ;;
+              "g6-standard-4")
+                echo "  • Server Cost: \$48/month (8GB RAM - g6-standard-4)"
+                ;;
+              *)
+                echo "  • Server Cost: Variable (custom server type)"
+                ;;
+            esac
+            echo "  • Total Monthly Cost: Above amount (single server deployment)"
+            echo ""
+            echo "🎮 **Game Server Info:**"
+            echo "  • Port: 27015 (TCP/UDP)"
+            echo "  • Max Players: 8 (configurable)"
+            echo "  • Game Mode: American Truck Simulator Multiplayer"
+            echo "  • Cost: \$5/month (optimized for lightweight game server)"
+            echo ""
+            echo "🔧 **Next Steps:**"
+            echo "  1. Wait 2-5 minutes for DNS propagation"
+            echo "  2. Game server will be available shortly"
+            echo "  3. Connect using any of these domains:"
+            echo "     • Primary: ats.7gram.xyz:27015"
+            echo "     • Game: game.ats.7gram.xyz:27015"
+            echo "     • Server: server.ats.7gram.xyz:27015"
+            echo "  4. Access web interfaces:"
+            echo "     • Main: https://ats.7gram.xyz"
+            echo "     • Web: https://www.ats.7gram.xyz"
+            echo "     • API: https://api.ats.7gram.xyz"
+            echo "     • Management: https://server.ats.7gram.xyz"
+            echo "  5. Monitor performance via server logs"
+            echo ""
+          elif [[ "${DEPLOY_RESULT:-}" == "failure" ]]; then
+            echo "❌ **Deployment Failed**"
+            echo "  • Check individual job logs for details"
+            echo "  • Common issues: SSH connectivity, package installation"
+            echo "  • Retry deployment after resolving issues"
+            echo ""
+          else
+            echo "⚠️ **Deployment Status:** ${DEPLOY_RESULT:-'Unknown'}"
+            echo "  • Check workflow logs for current status"
+            echo ""
+          fi
+          
+          echo "✅ **ATS deployment using shared workflow complete!**"
+          echo "📖 For detailed logs, check the shared workflow jobs"
